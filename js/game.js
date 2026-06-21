@@ -1,9 +1,11 @@
-/* 全零〈オムニル〉— 星なき始まり — prototype v0.3 */
+/* 全零〈オムニル〉— 星なき始まり — prototype v0.4 */
 (() => {
   'use strict';
 
   const D = window.OMNIL_DATA;
-  const SAVE_KEY = 'omnil_rpg_prototype_v03';
+  const SAVE_KEY = 'omnil_rpg_prototype_v04';
+  const STAMINA_RECOVERY_MS = 3 * 60 * 1000;
+  let autoExploreTimer = null;
   const audio = window.OMNIL_AUDIO || { resume() {}, configure() {}, setTheme() {}, sfx() {}, stopAll() {} };
   const root = document.getElementById('gameRoot');
   const nav = document.getElementById('bottomNav');
@@ -32,16 +34,18 @@
       };
     });
     return {
-      version: 3,
+      version: 4,
       started: false,
       scene: 'title',
       currentLocation: 'lindholm',
       selectedCharacter: 'rainbow',
       gold: 120,
       adventureExp: 0,
-      inventory: { potion: 2, ether: 1, herb: 1 },
+      stamina: { current: 60, updatedAt: Date.now() },
+      inventory: { potion: 2, ether: 1, herb: 1, stamina_tonic: 1 },
       equipment: { rainbow: null, white: null, black: null },
-      crafted: [], activeQuests: [], completedQuests: [], kills: {},
+      crafted: [], activeQuests: [], completedQuests: [], questCompletions: {}, kills: {},
+      panelUi: { selected: { rainbow: null, white: null, black: null }, branch: { rainbow: 'overview', white: 'overview', black: 'overview' } },
       flags: {},
       audio: { music: true, sfx: true, volume: .52 },
       automation: { battleAutoDefault: false },
@@ -60,6 +64,9 @@
     merged.audio = { ...base.audio, ...(candidate.audio || {}) };
     merged.automation = { ...base.automation, ...(candidate.automation || {}) };
     merged.flags = { ...base.flags, ...(candidate.flags || {}) };
+    merged.questCompletions = { ...(candidate.questCompletions || {}) };
+    merged.stamina = { ...base.stamina, ...(candidate.stamina || {}) };
+    merged.panelUi = { ...base.panelUi, ...(candidate.panelUi || {}), selected: { ...base.panelUi.selected, ...(candidate.panelUi?.selected || {}) }, branch: { ...base.panelUi.branch, ...(candidate.panelUi?.branch || {}) } };
     merged.characters = { ...base.characters, ...(candidate.characters || {}) };
     Object.keys(base.characters).forEach((id) => {
       const old = candidate.characters?.[id] || {};
@@ -69,7 +76,9 @@
       merged.characters[id].unlockedPanels = [...new Set([...base.characters[id].unlockedPanels, ...oldPanels])];
       capResources(id, merged);
     });
-    merged.version = 3;
+    merged.version = 4;
+    merged.stamina.current = clamp(Number(merged.stamina.current) || base.stamina.current, 0, 100);
+    merged.stamina.updatedAt = Number(merged.stamina.updatedAt) || Date.now();
     merged.scene = 'title';
     merged.battle = null;
     merged.autoExplore = null;
@@ -78,7 +87,7 @@
 
   function loadState() {
     try {
-      const raw = localStorage.getItem(SAVE_KEY) || localStorage.getItem('omnil_rpg_prototype_v01');
+      const raw = localStorage.getItem(SAVE_KEY) || localStorage.getItem('omnil_rpg_prototype_v03') || localStorage.getItem('omnil_rpg_prototype_v01');
       return raw ? normalizeState(JSON.parse(raw)) : freshState();
     } catch (error) {
       console.warn('セーブ読み込み失敗', error);
@@ -147,17 +156,68 @@
 
   function getRankIndexByExp(exp = state.adventureExp) {
     let index = 0;
-    D.RANKS.forEach((rank, i) => { if (exp >= rank.threshold) index = i; });
+    D.RANKS.forEach((level, i) => { if (exp >= level.threshold) index = i; });
     return index;
   }
 
+  // 内部名は既存セーブ互換のため rank を残すが、ゲーム上の表記はすべて「冒険者レベル」。
   function getRank() { return D.RANKS[getRankIndexByExp()]; }
   function rankAllowed(required) {
-    return getRankIndexByExp() >= D.RANKS.findIndex((r) => r.id === required);
+    const requiredIndex = D.RANKS.findIndex((r) => String(r.id) === String(required));
+    return requiredIndex >= 0 && getRankIndexByExp() >= requiredIndex;
   }
   function expToNextRank() {
     const next = D.RANKS[getRankIndexByExp() + 1];
     return next ? next.threshold : null;
+  }
+  function getStaminaMax() { return getRank().maxStamina || 60; }
+  function refreshStamina() {
+    state.stamina ||= { current: getStaminaMax(), updatedAt: Date.now() };
+    const max = getStaminaMax();
+    const now = Date.now();
+    const elapsed = Math.max(0, now - (Number(state.stamina.updatedAt) || now));
+    const gained = Math.floor(elapsed / STAMINA_RECOVERY_MS);
+    if (gained > 0 && state.stamina.current < max) {
+      state.stamina.current = Math.min(max, state.stamina.current + gained);
+      state.stamina.updatedAt = (Number(state.stamina.updatedAt) || now) + gained * STAMINA_RECOVERY_MS;
+    }
+    if (state.stamina.current >= max) {
+      state.stamina.current = max;
+      state.stamina.updatedAt = now;
+    }
+    return gained;
+  }
+  function staminaRecoveryLabel() {
+    refreshStamina();
+    if (state.stamina.current >= getStaminaMax()) return '満タン';
+    const remain = STAMINA_RECOVERY_MS - ((Date.now() - state.stamina.updatedAt) % STAMINA_RECOVERY_MS);
+    return `次回 ${Math.max(1, Math.ceil(remain / 60000))}分後`;
+  }
+  function canSpendStamina(amount, floor = 0, protectFromZero = false) {
+    refreshStamina();
+    // オート探索では、下限0を選んだ場合でも『0＝力尽きる』を避けるため最低1は残す。
+    const requiredRemaining = protectFromZero ? Math.max(1, Number(floor) || 0) : Math.max(0, Number(floor) || 0);
+    return state.stamina.current - amount >= requiredRemaining;
+  }
+  function spendStamina(amount, reason, options = {}) {
+    refreshStamina();
+    state.stamina.current = Math.max(0, state.stamina.current - amount);
+    state.stamina.updatedAt = Date.now();
+    appendLog(`${reason}：スタミナ -${amount}`);
+    if (state.stamina.current <= 0) {
+      applyDefeatPenalty('力尽きた', `スタミナが尽きた。${reason}の途中で三人は動けなくなり、撤退した。`, options.locationId || state.currentLocation, !!options.fromAuto);
+      return false;
+    }
+    return true;
+  }
+  function restoreStamina(amount, note = 'スタミナが回復した。') {
+    refreshStamina();
+    const before = state.stamina.current;
+    state.stamina.current = clamp(state.stamina.current + amount, 0, getStaminaMax());
+    state.stamina.updatedAt = Date.now();
+    const restored = state.stamina.current - before;
+    if (restored > 0) appendLog(`${note}（+${restored}）`);
+    return restored;
   }
 
   function getDef(id) { return D.CHARACTER_DEFS[id]; }
@@ -249,11 +309,15 @@
 
   function addAdventureExp(amount) {
     const before = getRank();
+    const beforeMax = getStaminaMax();
     state.adventureExp += amount;
     const after = getRank();
+    const afterMax = getStaminaMax();
     if (after.id !== before.id) {
-      toast(`冒険者ランクが ${after.name} に上がった！`, 'good');
-      appendLog(`ギルドから ${after.name} の認定を受けた。`);
+      state.stamina.current = clamp((state.stamina.current || 0) + (afterMax - beforeMax), 0, afterMax);
+      state.stamina.updatedAt = Date.now();
+      toast(`冒険者レベルが ${after.name} に上がった！ スタミナ上限 +${afterMax - beforeMax}`, 'good');
+      appendLog(`冒険者レベルが ${after.name} になった。スタミナ上限は ${afterMax}。`);
     }
   }
 
@@ -275,21 +339,19 @@
     if (q.type === 'collect') return countItem(q.target);
     return state.kills[q.target] || 0;
   }
-  function isQuestAvailable(q) {
-    return state.adventureExp >= q.unlockAt && rankAllowed(q.rank);
-  }
+  function isQuestAvailable(q) { return state.adventureExp >= q.unlockAt && rankAllowed(q.rank); }
   function isQuestActive(id) { return state.activeQuests.includes(id); }
-  function isQuestDone(id) { return state.completedQuests.includes(id); }
+  function isQuestDone(id) { const q = D.QUESTS[id]; return !!q && !q.repeatable && state.completedQuests.includes(id); }
+  function questCompletionCount(id) { return state.questCompletions?.[id] || (state.completedQuests.includes(id) ? 1 : 0); }
   function canCompleteQuest(q) { return isQuestActive(q.id) && questProgress(q) >= q.amount; }
 
   function acceptQuest(id) {
     const q = D.QUESTS[id];
-    if (!q || !isQuestAvailable(q) || isQuestActive(id) || isQuestDone(id)) return;
+    if (!q || !isQuestAvailable(q) || isQuestActive(id) || (!q.repeatable && isQuestDone(id))) return;
     state.activeQuests.push(id);
     appendLog(`依頼を受注：「${q.name}」`);
     toast(`依頼を受注しました：${q.name}`, 'good');
-    saveGame();
-    render();
+    saveGame(); render();
   }
 
   function completeQuest(id) {
@@ -297,21 +359,22 @@
     if (!q || !canCompleteQuest(q)) return;
     if (q.type === 'collect') takeItem(q.target, q.amount);
     state.activeQuests = state.activeQuests.filter((x) => x !== id);
-    state.completedQuests.push(id);
+    state.questCompletions ||= {};
+    state.questCompletions[id] = (state.questCompletions[id] || 0) + 1;
+    if (!q.repeatable) state.completedQuests.push(id);
     state.gold += q.reward.gold;
     addAdventureExp(q.reward.advExp);
     q.reward.items?.forEach((item) => addItem(item.id, item.qty));
     if (id === 'q_herb') state.flags.protect = true;
     if (id === 'q_boss') state.flags.anger = true;
     appendLog(`依頼達成：「${q.name}」 報酬 ${q.reward.gold}G`);
-    saveGame();
-    render();
+    saveGame(); render();
     const extra = id === 'q_herb'
-      ? '\n\n治療師は、薬草を抱えて何度も頭を下げた。\n白零「……よかった。間に合ったんですね。」\n虹全「うん。白零が見つけてくれたからだ。」\n白零「私が……役に立てた？」\n虹全「もちろん。」\n\n【物語パネル：「守りたい」が解放条件を満たしました】'
+      ? `\n\n治療師は、薬草を抱えて何度も頭を下げた。\n白零「……よかった。間に合ったんですね。」\n虹全「うん。白零が見つけてくれたからだ。」\n白零「私が……役に立てた？」\n虹全「もちろん。」\n\n【物語パネル：「守りたい」が解放条件を満たしました】`
       : id === 'q_boss'
-        ? '\n\n黒零は、獣王が去った森をしばらく見ていた。\n黒零「……静かになった。」\n虹全「もう、怯えなくていい。」\n黒零「うん。この森は、壊させない。」\n\n【物語パネル：「壊したくない」が解放条件を満たしました】'
-        : '';
-    showDialogue('依頼達成', `《枝角亭》の受付は、静かに認定証を差し出した。\n「よくやったね。これで次の依頼も任せられる。」${extra}`);
+        ? `\n\n黒零は、獣王が去った森をしばらく見ていた。\n黒零「……静かになった。」\n虹全「もう、怯えなくていい。」\n黒零「うん。この森は、壊させない。」\n\n【物語パネル：「壊したくない」が解放条件を満たしました】`
+        : q.repeatable ? `\n\nこの依頼は繰り返し受注できます。今回の達成回数：${questCompletionCount(id)}回` : '';
+    showDialogue('依頼達成', `《枝角亭》の受付は、静かに報酬を差し出した。\n「助かったよ。次も頼りにしている。」${extra}`);
   }
 
   function canCraft(recipe) {
@@ -365,10 +428,11 @@
       state.characters[id].hp = stats.maxHp;
       state.characters[id].mp = stats.maxMp;
     });
-    appendLog('宿で休み、心身を整えた。');
-    toast('3人は休息を取った。HP・MPが全回復。', 'good');
-    saveGame();
-    render();
+    state.stamina.current = getStaminaMax();
+    state.stamina.updatedAt = Date.now();
+    appendLog('宿で休み、心身とスタミナを整えた。');
+    toast('3人は休息を取った。HP・MP・スタミナが全回復。', 'good');
+    saveGame(); render();
   }
 
   function canUnlockPanel(id, panel) {
@@ -408,10 +472,12 @@
   }
 
   function renderStatusStrip() {
-    const rank = getRank();
-    return `<div class="card" style="display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:14px;">
-      <div><span class="badge">冒険者 ${rank.name}</span><div style="font-size:11px;color:var(--muted);margin-top:5px;">${rank.description}</div></div>
-      <div style="text-align:right;"><strong style="color:var(--gold);font-size:17px;">${state.gold}G</strong><div style="font-size:10px;color:var(--muted);">所持金</div></div>
+    refreshStamina();
+    const rank = getRank(); const max = getStaminaMax();
+    return `<div class="status-strip-v4 card">
+      <div class="status-level"><span class="badge">冒険者 ${rank.name}</span><div class="status-description">${rank.description}</div></div>
+      <div class="status-stamina"><div class="meter-label"><span>スタミナ ${state.stamina.current}/${max}</span><span>${staminaRecoveryLabel()}</span></div><div class="meter stamina"><span style="width:${pct(state.stamina.current,max)}%"></span></div></div>
+      <div class="status-gold"><strong>${state.gold}G</strong><span>所持金</span></div>
     </div>`;
   }
 
@@ -428,7 +494,7 @@
   function renderTitle() {
     return `<section class="hero">
       <div class="hero-content">
-        <div class="hero-eyebrow">PIXEL FANTASY RPG　— PROTOTYPE v0.3 —</div>
+        <div class="hero-eyebrow">PIXEL FANTASY RPG　— PROTOTYPE v0.4 —</div>
         <h1>全零〈オムニル〉<br><span class="rainbow-text">星なき始まり</span></h1>
         <p>何も持たなかった三人が、出会いと旅の中で自分の意志を見つけていく。<br>白、黒、そして虹。零から始まる、三人の物語。</p>
         <div class="button-row">
@@ -437,11 +503,11 @@
         </div>
       </div>
     </section>
-    <h2 class="section-title">v0.3で遊べること</h2>
+    <h2 class="section-title">v0.4で遊べること</h2>
     <div class="grid three">
       <article class="card"><h3>◫ 世界と探索</h3><p>広域マップから町・草原・森・遺構を選択。探索で素材、宝、戦闘イベントが発生する。</p></article>
-      <article class="card"><h3>⚔ コマンド戦闘</h3><p>虹全・白零・黒零を順番に操作する、軽量な3人パーティ制ターンバトル。</p></article>
-      <article class="card"><h3>◉ 成長パネル</h3><p>技30・パッシブ10・能力値40の巨大パネル。技は使うほど熟練Lv.10まで成長する。</p></article>
+      <article class="card"><h3>⚔ コマンド戦闘</h3><p>虹全・白零・黒零を順番に操作する、軽量な3人パーティ制ターンバトル。AUTO戦闘にも対応。</p></article>
+      <article class="card"><h3>◉ 成長パネル</h3><p>技30・パッシブ10・能力値40の分岐ごとに見やすく選べる星盤。技は使うほど熟練Lv.10まで成長する。</p></article>
     </div>
     <p class="note">※現在のマップ・人物・敵は「遊びの芯を確認するための仮ドット」。次段階で世界の色設計、地形タイル、立ち絵、敵アニメーションまで本制作します。</p>`;
   }
@@ -450,18 +516,18 @@
     const next = expToNextRank();
     return `${renderStatusStrip()}${renderPartyStrip()}
       <h1 class="page-title">世界地図</h1>
-      <p class="page-subtitle">行き先を選択してください。探索地域は冒険者ランクによって解放されます。</p>
+      <p class="page-subtitle">行き先を選択してください。探索地域は冒険者レベルによって解放されます。</p>
       <div class="map-shell">
         <canvas id="worldCanvas" class="map-canvas" width="800" height="500"></canvas>
         ${Object.values(D.LOCATIONS).map((loc) => {
           const unlocked = rankAllowed(loc.rank);
-          return `<button class="map-label location-${loc.type} ${unlocked ? '' : 'locked'}" style="left:${loc.x}%;top:${loc.y}%" data-action="enter-location" data-id="${loc.id}" ${unlocked ? '' : 'disabled'}>${loc.name}<br><small>${unlocked ? (loc.type === 'town' ? '施設を利用' : '探索する') : `要 ${loc.rank}`}</small></button>`;
+          return `<button class="map-label location-${loc.type} ${unlocked ? '' : 'locked'}" style="left:${loc.x}%;top:${loc.y}%" data-action="enter-location" data-id="${loc.id}" ${unlocked ? '' : 'disabled'}>${loc.name}<br><small>${unlocked ? (loc.type === 'town' ? '施設を利用' : '探索する') : `要 冒険者Lv.${loc.rank}`}</small></button>`;
         }).join('')}
       </div>
-      <div class="map-legend"><span>◆ 街・村</span><span>◆ 探索地</span><span>▣ 未解放（ランク条件）</span></div>
+      <div class="map-legend"><span>◆ 街・村</span><span>◆ 探索地</span><span>▣ 未解放（冒険者Lv条件）</span></div>
       <div class="card" style="margin-top:13px;">
-        <strong>次の認定まで</strong>
-        <div class="meter-label"><span>${getRank().name}　ギルド経験 ${state.adventureExp}</span><span>${next ? `${next}で次ランク` : '最高ランク'}</span></div>
+        <strong>次の冒険者レベルまで</strong>
+        <div class="meter-label"><span>${getRank().name}　冒険者経験 ${state.adventureExp}</span><span>${next ? `${next}で次のLv` : '最高Lv'}</span></div>
         <div class="meter exp"><span style="width:${next ? pct(state.adventureExp - getRank().threshold, next - getRank().threshold) : 100}%"></span></div>
       </div>
       <h2 class="section-title">最近の記録</h2>
@@ -479,21 +545,22 @@
           <button class="facility-hotspot" style="left:72%;top:48%;" data-action="facility" data-id="craft">製造所</button>
           <button class="facility-hotspot" style="left:48%;top:70%;" data-action="facility" data-id="inn">宿屋</button>
           <button class="facility-hotspot" style="left:78%;top:73%;" data-action="facility" data-id="sell">買取所</button>
-        </div></div><div class="location-caption"><strong>《枝角亭》のある、草原の宿場町</strong><p>街の施設を選び、依頼の受注、買い物、製造、休息、素材売却を行える。</p></div>
+        </div></div><div class="location-caption"><strong>《枝角亭》のある、草原の宿場町</strong><p>依頼、買い物、製造、休息、素材売却を行える。宿屋ではスタミナも全回復する。</p></div>
         <h2 class="section-title">施設一覧</h2><div class="facility-grid">${renderFacilityCards()}</div>`;
     }
     const auto = state.autoExplore && state.autoExplore.locationId === loc.id;
+    const autoFactor = 2;
     return `${renderStatusStrip()}<button class="small-button" data-action="go-world">← 世界地図へ</button>
       <h1 class="page-title" style="margin-top:13px;">${loc.name}</h1><p class="page-subtitle">${loc.description}</p>
       <div class="location-hero"><canvas id="locationCanvas" class="location-canvas" data-location="${loc.id}" width="800" height="360"></canvas></div>${renderPartyStrip()}
-      <div class="card" style="margin-top:12px;"><h3>探索準備</h3><p>手動探索は1回ずつイベントを確認します。オート探索は5回分を連続で実行し、戦闘に遭遇した時は自動戦闘へ切り替わります。</p>
-      ${auto ? `<div class="automation-status"><b>オート探索中</b><span>残り ${state.autoExplore.remaining} 回</span><button class="small-button" data-action="cancel-auto-explore">中止</button></div>` : `<div class="button-row" style="margin-top:12px;"><button class="action-button" data-action="explore" data-id="${loc.id}">探索する</button><button class="secondary-button" data-action="auto-explore" data-id="${loc.id}">オート探索 ×5</button><button class="secondary-button" data-action="go-world">撤退して世界地図へ</button></div>`}</div>
-      <p class="note">危険度：${loc.id === 'fallen_ruins' ? '高' : loc.id === 'whisper_woods' ? '中' : '低'} ／ 冒険者条件：${loc.rank}</p>`;
+      <div class="card exploration-card"><h3>探索準備</h3><p>手動探索：1回ごとに <b>スタミナ ${loc.explorationCost}</b>。敵との戦闘開始時に追加で <b>${loc.battleCost}</b> 消費します。オート探索中は全消費が <b>${autoFactor}倍</b> になります。</p>
+      ${auto ? `<div class="automation-status"><b>オート探索中</b><span>下限 ${state.autoExplore.floor} ／ 現在 ${state.stamina.current}</span><span>探索 ${state.autoExplore.steps} 回</span><button class="small-button" data-action="cancel-auto-explore">中止</button></div>` : `<div class="button-row" style="margin-top:12px;"><button class="action-button" data-action="explore" data-id="${loc.id}">探索する（ST ${loc.explorationCost}）</button><button class="secondary-button" data-action="auto-explore-open" data-id="${loc.id}">オート探索（ST消費2倍）</button><button class="secondary-button" data-action="go-world">撤退して世界地図へ</button></div>`}</div>
+      <p class="note">危険度：${loc.id === 'fallen_ruins' ? '高' : loc.id === 'whisper_woods' ? '中' : '低'} ／ 必要条件：冒険者Lv.${loc.rank} ／ スタミナが0になると、敗北と同じペナルティで撤退します。</p>`;
   }
 
   function renderFacilityCards() {
     const data = [
-      ['guild','⚑','冒険者ギルド','依頼の受注・報告・ランク認定'],
+      ['guild','⚑','冒険者ギルド','依頼の受注・報告・冒険者レベル'],
       ['shop','▤','道具屋','回復アイテムを購入'],
       ['craft','⚒','製造所','素材から装備・道具を作る'],
       ['inn','⌂','宿屋','20GでHP・MPを全回復'],
@@ -524,48 +591,78 @@
 
   function panelRequirementText(id,panel) {
     const ch=getChar(id); const lacks=[];
-    if(panel.prerequisite && !ch.unlockedPanels.includes(panel.prerequisite)) lacks.push('前提');
-    if(panel.requiresAll && !panel.requiresAll.every((need)=>ch.unlockedPanels.includes(need))) lacks.push('3系統の終端');
-    if(panel.minLevel && ch.level < panel.minLevel) lacks.push(`Lv.${panel.minLevel}`);
-    if(panel.storyFlag && !state.flags[panel.storyFlag]) lacks.push(panel.storyFlag.startsWith('terios')?'テリオス覚醒':'物語');
+    if(panel.prerequisite && !ch.unlockedPanels.includes(panel.prerequisite)) lacks.push('前提パネル');
+    if(panel.requiresAll && !panel.requiresAll.every((need)=>ch.unlockedPanels.includes(need))) lacks.push('他系統の終端');
+    if(panel.minLevel && ch.level < panel.minLevel) lacks.push(`キャラLv.${panel.minLevel}`);
+    if(panel.storyFlag && !state.flags[panel.storyFlag]) lacks.push(panel.storyFlag.startsWith('terios')?'テリオス覚醒':'物語進行');
     if(ch.panelPoints < panel.cost) lacks.push('PT不足');
     return lacks.join('・');
   }
-
-  function renderPanel() {
-    const id=state.selectedCharacter; const def=getDef(id); const ch=getChar(id); const stats=getStats(id);
-    const count={skill:0,passive:0,stat:0}; def.panels.forEach(p=>{if(ch.unlockedPanels.includes(p.id)&&count[p.category]!==undefined)count[p.category]++;});
-    const labels=id==='rainbow'?['↑ 始まり：回復・強化','→ 終わり：攻撃・弱体','↓ 調律：防御・特殊','← 原初：全能（テリオス後）']:id==='white'?['← 回復の道','→ 祝福と光刃の道','↓ アルファ・テリオス']:['← 破壊の道','→ 妨害と断絶の道','↓ オメガ・テリオス'];
-    return `${renderStatusStrip()}<button class="small-button" data-action="go-party">← 仲間一覧へ</button><h1 class="page-title" style="margin-top:13px;">${def.name}：成長パネル</h1>
-      <p class="page-subtitle">技30・パッシブ10・能力値40。隣接するパネルを順に解放します。習得した技は使うほど熟練Lv.10まで成長します。</p>
-      <div class="card panel-summary"><div><strong>所持パネルポイント</strong><div class="note">Lv.${ch.level}／${def.role}</div></div><strong class="panel-pt">${ch.panelPoints} PT</strong><div class="panel-counts"><span>技 ${count.skill}/30</span><span>常時 ${count.passive}/10</span><span>能力 ${count.stat}/40</span></div></div>
-      <div class="panel-legend">${labels.map(x=>`<span>${x}</span>`).join('')}</div>
-      <div class="panel-viewport"><div class="panel-map panel-map-${id}">
-        <div class="panel-core">${def.panels.find(p=>p.category==='core').name}<small>根源</small></div>
-        ${def.panels.filter(p=>p.category!=='core').map(p=>renderSkillPanel(id,p)).join('')}
-      </div></div>
-      <p class="note">★ 技　◈ パッシブ　＋ 能力値　／　黄色いパネルは現在解放可能。テリオス盤は物語後半の覚醒と、各系統の終端解放で開きます。</p>`;
+  function panelMeta(owner, branch) {
+    const map={
+      rainbow:{start:['始まりの力','回復・再生・強化','✦'],end:['終わりの力','攻撃・弱体・断絶','✧'],tune:['調律の力','防御・障壁・特殊','◈'],origin:['原初の力','攻防補妨・万象調律','◎']},
+      white:{heal:['回復の道','回復・再生・蘇生','✦'],buff:['祝福と光刃の道','強化・防護・光攻撃','◇'],terios:['アルファ・テリオス','完全な始まり','◎']},
+      black:{attack:['破壊の道','物理・魔法・終焉攻撃','✧'],debuff:['妨害と断絶の道','弱体・停止・侵食','◇'],terios:['オメガ・テリオス','完全な終わり','◎']},
+    };
+    const v=map[owner][branch]; return {branch,label:v[0],description:v[1],icon:v[2]};
   }
-
+  function panelEffectText(panel) {
+    if(panel.skill) return `技を習得：${D.SKILLS[panel.skill].description}`;
+    if(panel.passive) return `常時効果：${D.PASSIVES[panel.passive].description}`;
+    if(panel.effect) return Object.entries(panel.effect).map(([k,v])=>`${({maxHp:'最大HP',maxMp:'最大MP',atk:'攻撃',def:'防御',mag:'魔力',agi:'敏捷',luck:'幸運'})[k]||k}+${v}`).join('／');
+    return panel.description;
+  }
+  function panelProgress(id, branch) {
+    const ch=getChar(id); const nodes=getDef(id).panels.filter(p=>p.branch===branch); return [nodes.filter(p=>ch.unlockedPanels.includes(p.id)).length,nodes.length];
+  }
+  function renderPanel() {
+    const id=state.selectedCharacter; const def=getDef(id); const ch=getChar(id);
+    const count={skill:0,passive:0,stat:0}; def.panels.forEach(p=>{if(ch.unlockedPanels.includes(p.id)&&count[p.category]!==undefined)count[p.category]++;});
+    const branches=[...new Set(def.panels.filter(p=>p.branch!=='core').map(p=>p.branch))];
+    const active=state.panelUi?.branch?.[id] || 'overview';
+    return `${renderStatusStrip()}<button class="small-button" data-action="go-party">← 仲間一覧へ</button><h1 class="page-title" style="margin-top:13px;">${def.name}：成長パネル</h1>
+      <p class="page-subtitle">ドラクエ11風の分岐盤を、スマホでも読めるように「系統ごとの星盤」に整理しました。パネルはすべて選択でき、詳細を見てから解放できます。</p>
+      <div class="card panel-summary"><div><strong>所持パネルポイント</strong><div class="note">キャラLv.${ch.level}／${def.role}</div></div><strong class="panel-pt">${ch.panelPoints} PT</strong><div class="panel-counts"><span>技 ${count.skill}/30</span><span>常時 ${count.passive}/10</span><span>能力 ${count.stat}/40</span></div></div>
+      <div class="panel-tabs"><button class="panel-tab ${active==='overview'?'active':''}" data-action="panel-branch" data-id="${id}" data-branch="overview">全体図</button>${branches.map(b=>{const m=panelMeta(id,b),pr=panelProgress(id,b);return `<button class="panel-tab ${active===b?'active':''}" data-action="panel-branch" data-id="${id}" data-branch="${b}">${m.icon} ${m.label}<small>${pr[0]}/${pr[1]}</small></button>`}).join('')}</div>
+      ${active==='overview'?renderPanelOverview(id,branches):renderPanelBranch(id,active)}
+      ${renderPanelInspector(id)}
+      <p class="note">★ 技　◈ パッシブ　＋ 能力値。緑＝解放済、金＝現在解放可能、青灰＝条件未達。どのパネルもタップして詳細を確認できます。</p>`;
+  }
+  function renderPanelOverview(id,branches) {
+    return `<div class="panel-overview"><div class="panel-core-v4"><b>${getDef(id).panels.find(p=>p.category==='core').name}</b><small>根源</small></div>${branches.map(branch=>{const m=panelMeta(id,branch),pr=panelProgress(id,branch);return `<button class="branch-card branch-${branch}" data-action="panel-branch" data-id="${id}" data-branch="${branch}"><span class="branch-icon">${m.icon}</span><span><b>${m.label}</b><small>${m.description}</small><em>${pr[0]} / ${pr[1]} 解放</em></span></button>`}).join('')}</div>`;
+  }
+  function renderPanelBranch(id,branch) {
+    const m=panelMeta(id,branch); const panels=getDef(id).panels.filter(p=>p.branch===branch); const [done,total]=panelProgress(id,branch);
+    return `<section class="branch-board"><header><span class="branch-icon">${m.icon}</span><div><h2>${m.label}</h2><p>${m.description}　—　${done}/${total} 解放</p></div></header><div class="branch-route">${panels.map(p=>renderSkillPanel(id,p)).join('')}</div></section>`;
+  }
   function renderSkillPanel(id,panel) {
-    const ch=getChar(id); const unlocked=ch.unlockedPanels.includes(panel.id); const available=canUnlockPanel(id,panel); const status=unlocked?'unlocked':available?'available':'locked';
-    const icon=panel.category==='skill'?'★':panel.category==='passive'?'◈':'＋'; const req=!unlocked?panelRequirementText(id,panel):'';
-    const style=`left:${panel.position.x}px;top:${panel.position.y}px;`;
-    return `<button class="panel-node ${status} node-${panel.category} branch-${panel.branch}" style="${style}" data-action="unlock-panel" data-id="${id}" data-panel="${panel.id}" ${unlocked||!available?'disabled':''} title="${panel.description}"><span>${icon}</span><b>${panel.name}</b><small>${unlocked?'解放済':`${panel.cost}PT${req?`／${req}`:''}`}</small></button>`;
+    const ch=getChar(id); const unlocked=ch.unlockedPanels.includes(panel.id); const available=canUnlockPanel(id,panel); const selected=state.panelUi?.selected?.[id]===panel.id; const status=unlocked?'unlocked':available?'available':'locked';
+    const icon=panel.category==='skill'?'★':panel.category==='passive'?'◈':'＋';
+    return `<button class="panel-node-v4 ${status} ${selected?'selected':''}" data-action="panel-select" data-id="${id}" data-panel="${panel.id}" aria-pressed="${selected}"><span class="node-icon">${icon}</span><span class="node-type">${panel.category==='skill'?'技':panel.category==='passive'?'常時':'能力'}</span><b>${panel.name}</b><small>${unlocked?'解放済':available?`${panel.cost}PTで解放可`:`${panel.cost}PT／${panelRequirementText(id,panel)}`}</small></button>`;
+  }
+  function renderPanelInspector(id) {
+    const def=getDef(id); const selectedId=state.panelUi?.selected?.[id]; const panel=def.panels.find(p=>p.id===selectedId);
+    if(!panel) return `<div class="panel-inspector empty"><b>パネルを選択</b><span>系統を開き、気になるパネルをタップすると効果・解放条件をここで確認できます。</span></div>`;
+    const ch=getChar(id); const unlocked=ch.unlockedPanels.includes(panel.id); const available=canUnlockPanel(id,panel); const type=panel.category==='skill'?'技':panel.category==='passive'?'常時効果':panel.category==='stat'?'能力値':'根源';
+    return `<div class="panel-inspector"><div class="panel-inspector-head"><span class="badge">${type}</span><h2>${panel.name}</h2>${unlocked?'<span class="badge done">解放済</span>':available?'<span class="badge active">解放可能</span>':'<span class="badge locked">条件未達</span>'}</div><p>${panel.description}</p><div class="panel-effect"><b>効果</b><span>${panelEffectText(panel)}</span></div>${!unlocked?`<div class="panel-conditions"><b>解放条件</b><span>${panelRequirementText(id,panel)||`${panel.cost}PT`}</span></div>`:''}<div class="panel-inspector-actions">${available?`<button class="primary-button" data-action="panel-unlock-selected" data-id="${id}" data-panel="${panel.id}">${panel.cost}PTで解放する</button>`:''}${unlocked&&panel.skill?`<span class="note">技は戦闘で使うほど習熟Lv.10まで強化されます。</span>`:''}</div></div>`;
   }
 
   function renderQuestLog() {
-    const active = state.activeQuests.map((id) => D.QUESTS[id]);
-    const complete = state.completedQuests.map((id) => D.QUESTS[id]);
-    return `${renderStatusStrip()}<h1 class="page-title">依頼帳</h1><p class="page-subtitle">受注中の依頼は、ギルドで報告すると報酬と冒険者経験値を得られます。</p>
-      <h2 class="section-title">受注中</h2>${active.length ? `<div class="list">${active.map((q)=>renderQuestRow(q,'active')).join('')}</div>` : '<div class="empty-state">受注中の依頼はありません。<br>リンドホルムのギルド《枝角亭》で依頼を受けましょう。</div>'}
-      <h2 class="section-title">達成済み</h2>${complete.length ? `<div class="list">${complete.map((q)=>renderQuestRow(q,'done')).join('')}</div>` : '<div class="empty-state">まだ達成済みの依頼はありません。</div>'}
+    const active = state.activeQuests.map((id) => D.QUESTS[id]).filter(Boolean);
+    const fixed = Object.values(D.QUESTS).filter(q=>!q.repeatable && isQuestDone(q.id));
+    const repeat = Object.values(D.QUESTS).filter(q=>q.repeatable && isQuestAvailable(q));
+    const available = Object.values(D.QUESTS).filter(q=>isQuestAvailable(q) && !isQuestActive(q.id) && (q.repeatable || !isQuestDone(q.id)));
+    return `${renderStatusStrip()}<h1 class="page-title">依頼帳</h1><p class="page-subtitle">一回限りの依頼は物語と世界を進め、繰り返し依頼は素材・所持金・冒険者経験を安定して集められます。</p>
+      <h2 class="section-title">受注中</h2>${active.length ? `<div class="list">${active.map((q)=>renderQuestRow(q,'active')).join('')}</div>` : '<div class="empty-state">受注中の依頼はありません。リンドホルムのギルド《枝角亭》で依頼を受けましょう。</div>'}
+      <h2 class="section-title">受注可能</h2>${available.length?`<div class="list">${available.slice(0,6).map(q=>renderQuestRow(q,'available')).join('')}</div>`:'<div class="empty-state">現在受注できる依頼はありません。</div>'}
+      <h2 class="section-title">繰り返し依頼の記録</h2>${repeat.length?`<div class="list">${repeat.map(q=>renderQuestRow(q,'repeat')).join('')}</div>`:'<div class="empty-state">冒険者Lvを上げると、繰り返し依頼が増えます。</div>'}
+      <h2 class="section-title">完了した一回限りの依頼</h2>${fixed.length ? `<div class="list">${fixed.map((q)=>renderQuestRow(q,'done')).join('')}</div>` : '<div class="empty-state">まだ達成済みの一回限り依頼はありません。</div>'}
       <div class="button-row" style="margin-top:15px;"><button class="secondary-button" data-action="enter-location" data-id="lindholm">ギルドへ向かう</button></div>`;
   }
-
   function renderQuestRow(q, mode = '') {
-    const p = questProgress(q); const done = mode === 'done'; const active = mode === 'active';
-    return `<div class="list-row"><span class="badge ${done ? 'done' : active ? 'active' : ''}">${done ? '達成済' : active ? `${p}/${q.amount}` : q.rank}</span><div class="row-main"><strong>${q.name}</strong><div class="meta">${q.description}</div><div class="meta">報酬：${q.reward.gold}G／冒険者経験 ${q.reward.advExp}</div></div>${active && canCompleteQuest(q) ? '<span class="badge done">報告可能</span>' : ''}</div>`;
+    const p = questProgress(q); const done = mode === 'done'; const active = mode === 'active'; const repeat = q.repeatable;
+    const badge=done?'達成済':active?`${p}/${q.amount}`:repeat?`繰返 ${questCompletionCount(q.id)}回`:`冒険者Lv.${q.rank}`;
+    return `<div class="list-row"><span class="badge ${done ? 'done' : active ? 'active' : ''}">${badge}</span><div class="row-main"><strong>${q.name}</strong><div class="meta">${q.description}</div><div class="meta">報酬：${q.reward.gold}G／冒険者経験 ${q.reward.advExp}${repeat?'／繰り返し可':''}</div></div>${active && canCompleteQuest(q) ? '<span class="badge done">報告可能</span>' : ''}</div>`;
   }
 
   function renderBag() {
@@ -606,7 +703,7 @@
 
   function enterLocation(id) {
     const loc = D.LOCATIONS[id];
-    if (!loc || !rankAllowed(loc.rank)) return toast(`この場所には ${loc.rank}級 以上が必要です。`, 'warn');
+    if (!loc || !rankAllowed(loc.rank)) return toast(`この場所には 冒険者Lv.${loc.rank} 以上が必要です。`, 'warn');
     state.currentLocation = id;
     state.scene = 'location';
     saveGame();
@@ -614,30 +711,56 @@
   }
 
   function explorationAvailable() { return Object.keys(state.characters).every((id)=>getChar(id).hp>0); }
-
-  function autoResult(text) { if(state.autoExplore){ state.autoExplore.results.push(text); } }
+  function autoResult(text) { if(state.autoExplore){ state.autoExplore.results.push(text); if(state.autoExplore.results.length>12) state.autoExplore.results.shift(); } }
   function explore(locationId, fromAuto=false) {
     if (!explorationAvailable()) { if(fromAuto) return stopAutoExplore('仲間が戦闘不能になったため中止しました。'); toast('戦闘不能の仲間がいます。宿屋で休んでください。','warn'); return 'stop'; }
-    const loc=D.LOCATIONS[locationId]; if(!loc?.enemyPool) return 'stop'; const roll=Math.random();
-    if(roll<.54){ let enemies=[choice(loc.enemyPool)]; if(loc.id==='windy_plain'&&Math.random()<.26)enemies.push(choice(['pale_slime','grass_hare'])); if(loc.id==='whisper_woods'&&Math.random()<.26)enemies.push(choice(['wind_wolf','whisper_treant'])); if(loc.id==='fallen_ruins'&&Math.random()<.22)enemies.push('ruin_sentinel'); if(loc.id==='whisper_woods'&&state.flags.anger!==true&&state.adventureExp>=90&&Math.random()<.12)enemies=['moss_wolf']; startBattle(enemies,loc.id,{auto:fromAuto||state.automation.battleAutoDefault,autoExplore:fromAuto}); return 'battle'; }
+    const loc=D.LOCATIONS[locationId]; if(!loc?.enemyPool) return 'stop';
+    const cost=(loc.explorationCost||3)*(fromAuto?2:1);
+    const floor=fromAuto ? (state.autoExplore?.floor || 0) : 0;
+    if(fromAuto && !canSpendStamina(cost,floor,true)) return stopAutoExplore(`スタミナ下限 ${floor} を守るため、探索を終了しました。`);
+    if(!spendStamina(cost, fromAuto?`オート探索（${loc.name}）`:`探索（${loc.name}）`,{locationId,fromAuto})) return 'stop';
+    const roll=Math.random();
+    if(roll<.54){ let enemies=[choice(loc.enemyPool)]; if(loc.id==='windy_plain'&&Math.random()<.26)enemies.push(choice(['pale_slime','grass_hare'])); if(loc.id==='whisper_woods'&&Math.random()<.26)enemies.push(choice(['wind_wolf','whisper_treant'])); if(loc.id==='fallen_ruins'&&Math.random()<.22)enemies.push('ruin_sentinel'); if(loc.id==='whisper_woods'&&state.flags.anger!==true&&state.adventureExp>=100&&Math.random()<.12)enemies=['moss_wolf']; const started=startBattle(enemies,loc.id,{auto:fromAuto||state.automation.battleAutoDefault,autoExplore:fromAuto}); return started?'battle':'stop'; }
     if(roll<.88){ const item=choice(loc.materialPool); const qty=rng(1,item==='herb'?3:2); addItem(item,qty); const text=`${D.ITEM_DEFS[item].name} ×${qty}`; appendLog(`${loc.name}で ${text} を見つけた。`); autoResult(`素材：${text}`); if(!fromAuto)toast(`${text} を発見！`,'good'); saveGame(); if(!fromAuto)render(); return 'loot'; }
     const gold=rng(18,44); state.gold+=gold; appendLog(`${loc.name}で古い袋を発見。${gold}Gを得た。`); autoResult(`${gold}G を発見`); if(!fromAuto)toast(`古い袋を発見。${gold}Gを得た！`,'good'); saveGame(); if(!fromAuto)render(); return 'gold';
   }
-
-  function startAutoExplore(locationId) {
+  function openAutoExploreSetup(locationId) {
+    const loc=D.LOCATIONS[locationId]; refreshStamina();
+    if (state.stamina.current <= 1) return toast('スタミナが不足しています。宿屋か活力の小瓶で回復してください。', 'warn');
+    const minimum=Math.min(state.stamina.current - 1, Math.max(0,(loc.explorationCost||3)*2));
+    showModal(`<div class="modal-header"><div><h2>オート探索の設定</h2><p>${loc.name}を、指定したスタミナ下限まで自動で探索します。探索・戦闘のスタミナ消費は2倍です。</p></div><button class="modal-close" data-action="modal-close">×</button></div><div class="auto-setup"><label>現在のスタミナ <b>${state.stamina.current}/${getStaminaMax()}</b></label><label for="autoStaminaFloor">停止するスタミナ下限：<output id="autoFloorValue">${minimum}</output></label><input id="autoStaminaFloor" type="range" min="0" max="${Math.max(0,state.stamina.current-1)}" value="${minimum}" oninput="document.getElementById('autoFloorValue').value=this.value"><div class="auto-floor-presets"><button class="small-button" type="button" onclick="document.getElementById('autoStaminaFloor').value=0;document.getElementById('autoFloorValue').value=0">0</button><button class="small-button" type="button" onclick="document.getElementById('autoStaminaFloor').value=10;document.getElementById('autoFloorValue').value=10">10</button><button class="small-button" type="button" onclick="document.getElementById('autoStaminaFloor').value=20;document.getElementById('autoFloorValue').value=20">20</button><button class="small-button" type="button" onclick="document.getElementById('autoStaminaFloor').value=Math.floor(${state.stamina.current}/2);document.getElementById('autoFloorValue').value=Math.floor(${state.stamina.current}/2)">半分</button></div><p class="note">下限を下回る消費が必要になる前に、自動で帰還します。スタミナ0になると通常の敗北と同じ扱いで撤退します。</p></div><div class="modal-footer"><button class="secondary-button" data-action="modal-close">戻る</button><button class="primary-button" data-action="auto-explore-confirm" data-id="${locationId}">この設定で開始</button></div>`);
+  }
+  function startAutoExplore(locationId, floor=0) {
     if(!explorationAvailable()) return toast('戦闘不能の仲間がいます。宿屋で休んでください。','warn');
-    state.autoExplore={locationId,remaining:5,results:[]}; appendLog(`${D.LOCATIONS[locationId].name}でオート探索を開始。`); render(); window.setTimeout(runAutoExploreStep,250);
+    refreshStamina(); floor=clamp(Number(floor)||0,0,state.stamina.current);
+    if(state.stamina.current<=1) return toast('スタミナが不足しています。宿屋か活力の小瓶で回復してください。','warn');
+    if(state.stamina.current<=floor) return toast('下限が現在のスタミナ以上です。下限を下げてください。','warn');
+    state.autoExplore={locationId,floor,steps:0,results:[]}; appendLog(`${D.LOCATIONS[locationId].name}でオート探索を開始（下限 ${floor}）。`); saveGame(); render(); window.clearTimeout(autoExploreTimer); autoExploreTimer=window.setTimeout(runAutoExploreStep,300);
   }
   function runAutoExploreStep() {
-    const a=state.autoExplore; if(!a||state.battle) return; if(a.remaining<=0) return finishAutoExplore(); a.remaining-=1; const outcome=explore(a.locationId,true); render(); if(outcome!=='battle') window.setTimeout(runAutoExploreStep,420);
+    const a=state.autoExplore; if(!a||state.battle) return;
+    const loc=D.LOCATIONS[a.locationId]; const nextCost=(loc.explorationCost||3)*2;
+    if(!canSpendStamina(nextCost,a.floor,true)) return finishAutoExplore(`スタミナ下限 ${a.floor} に到達したため、探索を終了しました。`);
+    a.steps+=1; const outcome=explore(a.locationId,true); render(); if(outcome!=='battle'&&state.autoExplore) { autoExploreTimer=window.setTimeout(runAutoExploreStep,460); }
   }
-  function finishAutoExplore() { const a=state.autoExplore; if(!a)return; const summary=a.results.length?a.results.map(x=>`・${x}`).join('\n'):'目立った発見はなかった。'; state.autoExplore=null; saveGame(); render(); showDialogue('オート探索 完了',`5回の探索を終えた。\n\n${summary}`); }
-  function stopAutoExplore(reason='オート探索を中止しました。') { if(!state.autoExplore)return; state.autoExplore=null; saveGame(); render(); toast(reason,'warn'); }
+  function finishAutoExplore(reason='オート探索を完了しました。') {
+    const a=state.autoExplore; if(!a)return;
+    window.clearTimeout(autoExploreTimer);
+    const summary=a.results.length ? a.results.map(x=>`・${x}`).join('\n') : '目立った発見はなかった。';
+    const steps=a.steps;
+    state.autoExplore=null; saveGame(); render();
+    showDialogue('オート探索 終了', `${reason}\n探索回数：${steps}回\n残りスタミナ：${state.stamina.current}/${getStaminaMax()}\n\n${summary}`);
+  }
+  function stopAutoExplore(reason='オート探索を中止しました。') { if(!state.autoExplore)return; window.clearTimeout(autoExploreTimer); state.autoExplore=null; saveGame(); render(); toast(reason,'warn'); }
 
   function startBattle(enemyIds, locationId, options={}) {
+    const loc=D.LOCATIONS[locationId]; const cost=(loc?.battleCost||4)*(options.autoExplore?2:1); const floor=options.autoExplore?(state.autoExplore?.floor||0):0;
+    if(options.autoExplore && !canSpendStamina(cost,floor,true)) { stopAutoExplore(`戦闘に必要なスタミナを残すため、下限 ${floor} で探索を終了しました。`); return false; }
+    if(!spendStamina(cost, options.autoExplore?`オート戦闘開始（${loc.name}）`:`戦闘開始（${loc.name}）`,{locationId,fromAuto:!!options.autoExplore})) return false;
     const enemies=enemyIds.map((id,i)=>{const d=D.ENEMIES[id];return {...deepCopy(d),uid:`${id}_${Date.now()}_${i}`,hp:d.maxHp,status:{}};});
-    state.battle={locationId,enemies,turnIndex:0,order:['rainbow','white','black'],phase:'command',selected:null,auto:!!options.auto,autoExplore:!!options.autoExplore,log:`${enemies.map(e=>e.name).join('、')} が現れた！`};
-    state.scene='battle'; audio.sfx('hit'); render(); if(state.battle.auto) window.setTimeout(runAutoTurn,360);
+    state.battle={locationId,enemies,turnIndex:0,order:['rainbow','white','black'],phase:'command',selected:null,auto:!!options.auto,autoExplore:!!options.autoExplore,log:`${enemies.map(e=>e.name).join('、')} が現れた！
+スタミナ -${cost}`};
+    state.scene='battle'; audio.sfx('hit'); render(); if(state.battle.auto) window.setTimeout(runAutoTurn,360); return true;
   }
 
   function battleLog(message) {
@@ -653,7 +776,7 @@
 
   function renderBattle() {
     const b=state.battle; if(!b){state.scene='world';return renderWorld();} const actorId=b.order[b.turnIndex]; const actor=actorId?getChar(actorId):null; const actorDef=actorId?getDef(actorId):null; const log=battleLogLines();
-    return `<section class="battle-shell"><div class="battle-stage"><div class="enemy-area">${b.enemies.filter(e=>e.hp>0).map(enemy=>`<div class="battle-enemy"><canvas class="enemy-sprite" data-enemy="${enemy.id}" width="132" height="112"></canvas><div class="enemy-name">${enemy.name}</div><div class="enemy-hp meter"><span style="width:${pct(enemy.hp,enemy.maxHp)}%"></span></div><small style="font-size:9px;">HP ${enemy.hp}/${enemy.maxHp}${enemyStatusText(enemy)}</small></div>`).join('')}</div><div class="party-sprites">${['rainbow','white','black'].map(id=>{const ch=getChar(id),st=getStats(id);return `<div class="battle-hero"><canvas data-portrait="${id}" width="54" height="54"></canvas><strong>${getDef(id).short}${ch.hp<=0?'（戦闘不能）':''}</strong><div class="meter"><span style="width:${pct(ch.hp,st.maxHp)}%"></span></div><div class="meter mp"><span style="width:${pct(ch.mp,st.maxMp)}%"></span></div>${ch.barrier?'<small>◈障壁</small>':''}</div>`}).join('')}</div></div><div class="battle-log">${log.slice(-3).map(x=>`<div>› ${x}</div>`).join('')}</div><div class="battle-controls">${renderBattleControls(actorId,actor,actorDef)}</div></section>`;
+    return `<section class="battle-shell"><div class="battle-stamina">スタミナ ${state.stamina.current}/${getStaminaMax()}　<span>戦闘開始時に消費</span></div><div class="battle-stage"><div class="enemy-area">${b.enemies.filter(e=>e.hp>0).map(enemy=>`<div class="battle-enemy"><canvas class="enemy-sprite" data-enemy="${enemy.id}" width="132" height="112"></canvas><div class="enemy-name">${enemy.name}</div><div class="enemy-hp meter"><span style="width:${pct(enemy.hp,enemy.maxHp)}%"></span></div><small style="font-size:9px;">HP ${enemy.hp}/${enemy.maxHp}${enemyStatusText(enemy)}</small></div>`).join('')}</div><div class="party-sprites">${['rainbow','white','black'].map(id=>{const ch=getChar(id),st=getStats(id);return `<div class="battle-hero"><canvas data-portrait="${id}" width="54" height="54"></canvas><strong>${getDef(id).short}${ch.hp<=0?'（戦闘不能）':''}</strong><div class="meter"><span style="width:${pct(ch.hp,st.maxHp)}%"></span></div><div class="meter mp"><span style="width:${pct(ch.mp,st.maxMp)}%"></span></div>${ch.barrier?'<small>◈障壁</small>':''}</div>`}).join('')}</div></div><div class="battle-log">${log.slice(-3).map(x=>`<div>› ${x}</div>`).join('')}</div><div class="battle-controls">${renderBattleControls(actorId,actor,actorDef)}</div></section>`;
   }
   function enemyStatusText(enemy) { const s=enemy.status||{}; const list=[]; if(s.fracture)list.push('▽防御'); if(s.weaken)list.push('▽攻撃');if(s.slow)list.push('▽敏捷');if(s.bind)list.push('縛');return list.length?`　${list.join(' ')}`:''; }
 
@@ -697,19 +820,39 @@
     let allyTargets=skill.target==='allAllies'||skill.reviveAll?['rainbow','white','black']:(skill.target==='ally'?[target]:skill.target==='self'?[actorId]:[]); if(!allyTargets.length && (skill.heal||skill.barrier||skill.mpHeal||skill.allInOne)) allyTargets=['rainbow','white','black']; if(heal){allyTargets.filter(Boolean).forEach(id=>{const ch=getChar(id);if(ch.hp<=0&&(skill.revive||skill.reviveAll)){ch.hp=1;}if(ch.hp>0){let amount=Math.floor(getStats(id).maxHp*heal);if(skill.balanceHeal&&pct(ch.hp,getStats(id).maxHp)<.4)amount=Math.floor(amount*1.35);if(hasPassive(actorId,'heal_boost'))amount=Math.floor(amount*1.1);if(hasPassive(actorId,'low_ally_heal')&&pct(ch.hp,getStats(id).maxHp)<.5)amount=Math.floor(amount*1.15);ch.hp=clamp(ch.hp+amount,0,getStats(id).maxHp);if(hasPassive(actorId,'heal_regen'))ch.regen=Math.max(ch.regen||0,1);if(hasPassive(actorId,'heal_mp'))ch.mp=clamp(ch.mp+Math.floor(getStats(id).maxMp*.03),0,getStats(id).maxMp);}});}
     if(skill.cleanse)allyTargets.filter(Boolean).forEach(id=>{removeNegative(id);if(hasPassive(actorId,'cleanse_barrier'))applyBarrier(id,.10);}); if(skill.mpHeal)allyTargets.filter(Boolean).forEach(id=>{const ch=getChar(id);ch.mp=clamp(ch.mp+Math.floor(getStats(id).maxMp*skill.mpHeal*scale.potency),0,getStats(id).maxMp);}); if(skill.regen)allyTargets.filter(Boolean).forEach(id=>{getChar(id).regen=Math.max(getChar(id).regen||0,regen);}); if(skill.barrier)allyTargets.filter(Boolean).forEach(id=>applyBarrier(id,barrier)); if(skill.deathGuard)allyTargets.filter(Boolean).forEach(id=>getChar(id).deathGuard=true); if(skill.buffs)allyTargets.filter(Boolean).forEach(id=>addBuff(id,skill.buffs,(skill.turns||2)+dur)); if(skill.guard&&target){getChar(target).protectedBy=actorId;getChar(target).protectedTurns=(skill.turns||2)+dur;} if(skill.debuff)targetEnemies.length?targetEnemies.forEach(e=>applyDebuffs(e,skill.debuff,dur)):getAliveEnemies().forEach(e=>applyDebuffs(e,skill.debuff,dur)); if(skill.dispel)getAliveEnemies().forEach(e=>{if(e.status) delete e.status.buffs;}); if(skill.stealBuff&&skill.buffs)addBuff(actorId,skill.buffs,(skill.turns||2)+dur); if(skill.lifeSteal&&targetEnemies.length){const hit=0;const recovered=Math.floor((skill.power||1)*combatStat(actorId,skill.kind==='physical'?'atk':'mag')*skill.lifeSteal*.55);actor.hp=clamp(actor.hp+recovered,0,getStats(actorId).maxHp);} if(skill.mpSteal)actor.mp=clamp(actor.mp+Math.floor(getStats(actorId).maxMp*skill.mpSteal),0,getStats(actorId).maxMp); if(skill.allInOne){getAliveEnemies().forEach(e=>{const dmg=dealDamage(actorId,e,power,'special',true);battleLog(`${skill.name}！ ${e.name}に${dmg}ダメージ。`);});['rainbow','white','black'].forEach(id=>{const ch=getChar(id);ch.hp=clamp(ch.hp+Math.floor(getStats(id).maxHp*heal),0,getStats(id).maxHp);});}
     if(skill.kind==='physical'||skill.kind==='magic'||skill.kind==='special') { if(hasPassive(actorId,'fracture_chance')&&Math.random()<.2)targetEnemies.forEach(e=>setStatus(e,'fracture',1)); audio.sfx('hit'); } else audio.sfx('heal'); if(hasPassive(actorId,'skill_cycle')){actor.hp=clamp(actor.hp+Math.floor(getStats(actorId).maxHp*.02),0,getStats(actorId).maxHp);actor.mp=clamp(actor.mp+Math.floor(getStats(actorId).maxMp*.02),0,getStats(actorId).maxMp);} gainMastery(actorId,skill);battleLog(`${getDef(actorId).short}は ${skill.name} を使った。`);resolveAfterHit();}
-  function executeItem(actorId,itemId,targetId){const item=D.ITEM_DEFS[itemId];if(!takeItem(itemId,1))return;const target=getChar(targetId);if(item.effect.healHp)target.hp=clamp(target.hp+item.effect.healHp,0,getStats(targetId).maxHp);if(item.effect.healMp)target.mp=clamp(target.mp+item.effect.healMp,0,getStats(targetId).maxMp);audio.sfx('heal');battleLog(`${getDef(actorId).short}は ${item.name} を使った。`);resolveAfterHit();}
+  function executeItem(actorId,itemId,targetId){const item=D.ITEM_DEFS[itemId];if(!takeItem(itemId,1))return;const target=getChar(targetId);if(item.effect.healHp)target.hp=clamp(target.hp+item.effect.healHp,0,getStats(targetId).maxHp);if(item.effect.healMp)target.mp=clamp(target.mp+item.effect.healMp,0,getStats(targetId).maxMp);if(item.effect.restoreStamina)restoreStamina(item.effect.restoreStamina, `${item.name}でスタミナを回復した。`);audio.sfx('heal');battleLog(`${getDef(actorId).short}は ${item.name} を使った。`);resolveAfterHit();}
   function resolveAfterHit(){if(getAliveEnemies().length===0)return finishBattle(true);afterPlayerAction();}
   function afterPlayerAction(){const b=state.battle;b.selected=null;b.turnIndex+=1;while(b.turnIndex<b.order.length&&getChar(b.order[b.turnIndex]).hp<=0)b.turnIndex+=1;if(b.turnIndex>=b.order.length){b.phase='enemy';render();window.setTimeout(enemyPhase,b.auto?300:520);}else{b.phase='command';render();if(b.auto)window.setTimeout(runAutoTurn,260);}}
   function enemyPhase(){const b=state.battle;if(!b)return;for(const enemy of getAliveEnemies()){const targets=getAliveAllies();if(!targets.length)return finishBattle(false);const targetId=choice(targets);const move=enemy.status?.silence?enemy.skills[0]:choice(enemy.skills);const base=Math.max(1,Math.floor(enemyAttackValue(enemy)*move.power-effectiveDefenderDef(targetId,false)*.45+rng(-2,4)));applyDamage(targetId,base,false);if(move.effect==='fracture'){getChar(targetId).status||={};getChar(targetId).status.fracture=2;}battleLog(`${enemy.name}の${move.name}！ ${getDef(targetId).short}に${base}ダメージ。`);if(!getAliveAllies().length)return finishBattle(false);}tickBattleStatuses();b.turnIndex=0;while(b.turnIndex<b.order.length&&getChar(b.order[b.turnIndex]).hp<=0)b.turnIndex+=1;b.phase='command';render();if(b.auto)window.setTimeout(runAutoTurn,260);}
   function tickBattleStatuses(){state.battle.enemies.forEach(e=>{Object.keys(e.status||{}).forEach(k=>{if(k!=='buffs'){e.status[k]-=1;if(e.status[k]<=0)delete e.status[k];}});});['rainbow','white','black'].forEach(id=>{const ch=getChar(id);if(ch.guard)delete ch.guard;if(ch.regen){ch.hp=clamp(ch.hp+Math.floor(getStats(id).maxHp*.04),0,getStats(id).maxHp);ch.regen-=1;if(ch.regen<=0)delete ch.regen;}if(ch.status){Object.keys(ch.status).forEach(k=>{if(k==='buffs'){Object.keys(ch.status.buffs).forEach(stat=>{ch.status.buffs[stat].turns-=1;if(ch.status.buffs[stat].turns<=0)delete ch.status.buffs[stat];});}else{ch.status[k]-=1;if(ch.status[k]<=0)delete ch.status[k];}});}if(ch.protectedTurns){ch.protectedTurns-=1;if(ch.protectedTurns<=0){delete ch.protectedTurns;delete ch.protectedBy;}}});}
-  function finishBattle(victory){const b=state.battle;if(!b)return;const loc=D.LOCATIONS[b.locationId];if(!victory){state.gold=Math.max(0,state.gold-15);Object.keys(state.characters).forEach(id=>{const ch=getChar(id);ch.hp=Math.max(1,Math.floor(getStats(id).maxHp*.25));ch.mp=Math.max(0,Math.floor(getStats(id).maxMp*.25));});const fromAuto=!!b.autoExplore;state.battle=null;state.scene='location';if(fromAuto)return stopAutoExplore('敗北したため、オート探索を中止しました。');saveGame();render();showDialogue('撤退',`三人は ${loc.name} から撤退した。\n所持金を15G失い、傷ついた状態で戻ってきた。`);return;}const defeated=b.enemies;let exp=0,gold=0;const drops=[];defeated.forEach(enemy=>{exp+=enemy.exp;gold+=enemy.gold;state.kills[enemy.id]=(state.kills[enemy.id]||0)+1;enemy.drops.forEach(drop=>{if(Math.random()<=drop.chance){const qty=rng(drop.qty[0],drop.qty[1]);addItem(drop.id,qty);drops.push({id:drop.id,qty});}});});state.gold+=gold;const levelUps=[];['rainbow','white','black'].forEach(id=>{const levels=addCharacterExp(id,exp);if(levels.length)levelUps.push(`${getDef(id).short} Lv.${levels.join('・')}`);if(hasPassive(id,'kill_mp'))getChar(id).mp=clamp(getChar(id).mp+Math.floor(getStats(id).maxMp*.06),0,getStats(id).maxMp);if(hasPassive(id,'kill_hp'))getChar(id).hp=clamp(getChar(id).hp+Math.floor(getStats(id).maxHp*.05),0,getStats(id).maxHp);});const whiteLowest=getAliveAllies().sort((a,c)=>pct(getChar(a).hp,getStats(a).maxHp)-pct(getChar(c).hp,getStats(c).maxHp))[0];if(whiteLowest&&hasPassive('white','post_battle_heal'))getChar(whiteLowest).hp=clamp(getChar(whiteLowest).hp+Math.floor(getStats(whiteLowest).maxHp*.08),0,getStats(whiteLowest).maxHp);const first=!state.flags.firstVictory;if(first){state.flags.firstVictory=true;state.flags.choice=true;}const fromAuto=!!b.autoExplore;state.battle=null;state.scene='location';audio.sfx('victory');appendLog(`${defeated.map(e=>e.name).join('、')}を倒した。経験値${exp}／${gold}G`);const dropText=drops.length?drops.map(d=>`${D.ITEM_DEFS[d.id].name}×${d.qty}`).join('、'):'なし';if(fromAuto){autoResult(`戦闘勝利：${defeated.map(e=>e.name).join('・')}（${gold}G／${dropText}）`);saveGame();render();window.setTimeout(runAutoExploreStep,420);return;}saveGame();render();const levelsText=levelUps.length?`\n\n【レベルアップ】${levelUps.join('／')}\n各自3PTを獲得。`:'';const story=first?'\n\n戦いが終わり、草原に風が戻った。\n黒零「次は、どうする？」\n白零「虹全が決める？」\n虹全「……いや。三人で決めよう。もう、誰かの指示を待たなくていい。」\n\n【物語パネル：「選択」が解放条件を満たしました】':'';showDialogue('戦闘勝利',`${defeated.map(e=>e.name).join('、')}を倒した。\n経験値：${exp}　／　獲得金：${gold}G\n素材：${dropText}${levelsText}${story}`);}
+  function applyDefeatPenalty(title, text, locationId, fromAuto=false) {
+    window.clearTimeout(autoExploreTimer);
+    state.gold=Math.max(0,state.gold-15);
+    Object.keys(state.characters).forEach(id=>{const ch=getChar(id);ch.hp=Math.max(1,Math.floor(getStats(id).maxHp*.25));ch.mp=Math.max(0,Math.floor(getStats(id).maxMp*.25));});
+    state.battle=null; state.scene='location';
+    const hadAuto=!!state.autoExplore || fromAuto;
+    state.autoExplore=null;
+    appendLog(`${title}：15Gを失い、${D.LOCATIONS[locationId]?.name||'付近'}から撤退した。`);
+    saveGame(); render();
+    if(hadAuto) { toast(`${title}。オート探索を中止しました。`, 'warn'); return; }
+    showDialogue(title, `${text}
+
+所持金を15G失い、HP・MPが25%の状態で戻ってきた。`);
+  }
+  function finishBattle(victory){const b=state.battle;if(!b)return;const loc=D.LOCATIONS[b.locationId];if(!victory){applyDefeatPenalty('撤退',`三人は ${loc.name} から撤退した。`,b.locationId,!!b.autoExplore);return;}const defeated=b.enemies;let exp=0,gold=0;const drops=[];defeated.forEach(enemy=>{exp+=enemy.exp;gold+=enemy.gold;state.kills[enemy.id]=(state.kills[enemy.id]||0)+1;enemy.drops.forEach(drop=>{if(Math.random()<=drop.chance){const qty=rng(drop.qty[0],drop.qty[1]);addItem(drop.id,qty);drops.push({id:drop.id,qty});}});});state.gold+=gold;const levelUps=[];['rainbow','white','black'].forEach(id=>{const levels=addCharacterExp(id,exp);if(levels.length)levelUps.push(`${getDef(id).short} Lv.${levels.join('・')}`);if(hasPassive(id,'kill_mp'))getChar(id).mp=clamp(getChar(id).mp+Math.floor(getStats(id).maxMp*.06),0,getStats(id).maxMp);if(hasPassive(id,'kill_hp'))getChar(id).hp=clamp(getChar(id).hp+Math.floor(getStats(id).maxHp*.05),0,getStats(id).maxHp);});const whiteLowest=getAliveAllies().sort((a,c)=>pct(getChar(a).hp,getStats(a).maxHp)-pct(getChar(c).hp,getStats(c).maxHp))[0];if(whiteLowest&&hasPassive('white','post_battle_heal'))getChar(whiteLowest).hp=clamp(getChar(whiteLowest).hp+Math.floor(getStats(whiteLowest).maxHp*.08),0,getStats(whiteLowest).maxHp);const first=!state.flags.firstVictory;if(first){state.flags.firstVictory=true;state.flags.choice=true;}const fromAuto=!!b.autoExplore;state.battle=null;state.scene='location';audio.sfx('victory');appendLog(`${defeated.map(e=>e.name).join('、')}を倒した。経験値${exp}／${gold}G`);const dropText=drops.length?drops.map(d=>`${D.ITEM_DEFS[d.id].name}×${d.qty}`).join('、'):'なし';if(fromAuto){autoResult(`戦闘勝利：${defeated.map(e=>e.name).join('・')}（${gold}G／${dropText}）`);saveGame();render();autoExploreTimer=window.setTimeout(runAutoExploreStep,420);return;}saveGame();render();const levelsText=levelUps.length?`\n\n【レベルアップ】${levelUps.join('／')}\n各自3PTを獲得。`:'';const story=first?'\n\n戦いが終わり、草原に風が戻った。\n黒零「次は、どうする？」\n白零「虹全が決める？」\n虹全「……いや。三人で決めよう。もう、誰かの指示を待たなくていい。」\n\n【物語パネル：「選択」が解放条件を満たしました】':'';showDialogue('戦闘勝利',`${defeated.map(e=>e.name).join('、')}を倒した。\n経験値：${exp}　／　獲得金：${gold}G\n素材：${dropText}${levelsText}${story}`);}
 
   function useItemOutside(itemId) {
     const item = D.ITEM_DEFS[itemId];
     if (!item || countItem(itemId) <= 0) return;
+    if(item.effect?.restoreStamina) {
+      showModal(`<div class="modal-header"><div><h2>${item.name}を使う</h2><p>${item.description}</p></div><button class="modal-close" data-action="modal-close">×</button></div><div class="card"><div class="meter-label"><span>スタミナ ${state.stamina.current}/${getStaminaMax()}</span><span>+${item.effect.restoreStamina}</span></div><div class="meter stamina"><span style="width:${pct(state.stamina.current,getStaminaMax())}%"></span></div><div class="modal-footer"><button class="secondary-button" data-action="modal-close">戻る</button><button class="primary-button" data-action="use-stamina-item" data-id="${itemId}">使う</button></div></div>`); return;
+    }
     showModal(`<div class="modal-header"><div><h2>${item.name}を使う</h2><p>${item.description}</p></div><button class="modal-close" data-action="modal-close">×</button></div><div class="target-row">${['rainbow','white','black'].map((id)=>`<button class="target-button" data-action="use-item-outside-target" data-item="${itemId}" data-id="${id}">${getDef(id).short}<br>HP ${getChar(id).hp}/${getStats(id).maxHp}<br>MP ${getChar(id).mp}/${getStats(id).maxMp}</button>`).join('')}</div>`);
   }
-
+  function useStaminaItem(itemId) {
+    const item=D.ITEM_DEFS[itemId]; if(!item?.effect?.restoreStamina || !takeItem(itemId,1)) return;
+    const restored=restoreStamina(item.effect.restoreStamina, `${item.name}を使った。`); closeModal(); saveGame(); render(); toast(`${item.name}でスタミナを${restored}回復。`, 'good');
+  }
   function useItemOutsideTarget(itemId, id) {
     const item = D.ITEM_DEFS[itemId]; if (!item || !takeItem(itemId,1)) return;
     const ch = getChar(id); const stats = getStats(id);
@@ -728,17 +871,13 @@
   }
 
   function showGuild() {
-    const quests = Object.values(D.QUESTS);
-    showModal(`<div class="modal-header"><div><h2>冒険者ギルド《枝角亭》</h2><p>現在の認定：<b>${getRank().name}</b>　／　冒険者経験：${state.adventureExp}</p></div><button class="modal-close" data-action="modal-close">×</button></div>
-    <div class="divider"></div><div class="list">${quests.map((q)=>{
-      const available=isQuestAvailable(q),active=isQuestActive(q.id),done=isQuestDone(q.id),report=canCompleteQuest(q);
-      let action = done ? '<span class="badge done">達成済</span>' : report ? `<button class="small-button" data-action="quest-complete" data-id="${q.id}">報告する</button>` : active ? `<span class="badge active">進行 ${questProgress(q)}/${q.amount}</span>` : available ? `<button class="small-button" data-action="quest-accept" data-id="${q.id}">受注する</button>` : `<span class="badge locked">要 ${q.rank}</span>`;
-      return `<div class="list-row"><span class="badge">${q.rank}</span><div class="row-main"><strong>${q.name}</strong><div class="meta">${q.description}</div><div class="meta">報酬 ${q.reward.gold}G／経験 ${q.reward.advExp}</div></div>${action}</div>`;
-    }).join('')}</div><p class="note">依頼の達成報告は、必要な素材を持った状態で行います。</p>`);
+    const quests = Object.values(D.QUESTS); const fixed=quests.filter(q=>!q.repeatable); const repeat=quests.filter(q=>q.repeatable);
+    const row=(q)=>{const available=isQuestAvailable(q),active=isQuestActive(q.id),done=isQuestDone(q.id),report=canCompleteQuest(q); const action=done?'<span class="badge done">達成済</span>':report?`<button class="small-button" data-action="quest-complete" data-id="${q.id}">報告する</button>`:active?`<span class="badge active">進行 ${questProgress(q)}/${q.amount}</span>`:available?`<button class="small-button" data-action="quest-accept" data-id="${q.id}">受注する</button>`:`<span class="badge locked">要 冒険者Lv.${q.rank}</span>`; return `<div class="list-row"><span class="badge">${q.repeatable?'繰返':'一回'}</span><div class="row-main"><strong>${q.name}</strong><div class="meta">${q.description}</div><div class="meta">報酬 ${q.reward.gold}G／冒険者経験 ${q.reward.advExp}${q.repeatable?`／達成 ${questCompletionCount(q.id)}回`:''}</div></div>${action}</div>`;};
+    showModal(`<div class="modal-header"><div><h2>冒険者ギルド《枝角亭》</h2><p>現在の冒険者レベル：<b>${getRank().name}</b>　／　冒険者経験：${state.adventureExp}</p></div><button class="modal-close" data-action="modal-close">×</button></div><h3>一回限りの依頼</h3><div class="list">${fixed.map(row).join('')}</div><h3>繰り返し依頼</h3><div class="list">${repeat.map(row).join('')}</div><p class="note">繰り返し依頼は報告後、すぐに再受注できます。冒険者レベルを上げるほど、受けられる依頼・店の商品・行動範囲・スタミナ上限が増えます。</p>`);
   }
 
   function showShop() {
-    const available = ['potion','antidote', ...(rankAllowed('E') ? ['ether'] : [])].map((id)=>D.ITEM_DEFS[id]);
+    const available = ['potion','antidote','stamina_tonic', ...(rankAllowed('2') ? ['ether'] : [])].map((id)=>D.ITEM_DEFS[id]);
     showModal(`<div class="modal-header"><div><h2>道具屋</h2><p>所持金：<b style="color:var(--gold)">${state.gold}G</b></p></div><button class="modal-close" data-action="modal-close">×</button></div><div class="list">${available.map((item)=>`<div class="list-row"><span class="badge">道具</span><div class="row-main"><strong>${item.name}</strong><div class="meta">${item.description}</div></div><div><div class="value">${item.buy}G</div><button class="small-button" data-action="buy-item" data-id="${item.id}" ${state.gold < item.buy?'disabled':''}>買う</button></div></div>`).join('')}</div>`);
   }
 
@@ -747,7 +886,7 @@
   }
 
   function showInn() {
-    showModal(`<div class="modal-header"><div><h2>宿屋《風見鶏》</h2><p>20Gで三人のHPとMPを全回復します。</p></div><button class="modal-close" data-action="modal-close">×</button></div><div class="card"><p class="dialogue-text">白零「今日は、休みましょう。明日も歩くために。」
+    showModal(`<div class="modal-header"><div><h2>宿屋《風見鶏》</h2><p>20Gで三人のHP・MPと、パーティのスタミナを全回復します。</p></div><button class="modal-close" data-action="modal-close">×</button></div><div class="card"><div class="meter-label"><span>スタミナ ${state.stamina.current}/${getStaminaMax()}</span><span>宿泊後 ${getStaminaMax()}/${getStaminaMax()}</span></div><div class="meter stamina"><span style="width:${pct(state.stamina.current,getStaminaMax())}%"></span></div><p class="dialogue-text">白零「今日は、休みましょう。明日も歩くために。」
 
 虹全「賛成。温かいものも食べたい。」
 
@@ -907,12 +1046,17 @@
     else if (a === 'enter-location') enterLocation(id);
     else if (a === 'explore') explore(id);
     else if (a === 'auto-explore') startAutoExplore(id);
+    else if (a === 'auto-explore-open') openAutoExploreSetup(id);
+    else if (a === 'auto-explore-confirm') { const floor=document.getElementById('autoStaminaFloor')?.value || 0; closeModal(); startAutoExplore(id,floor); }
     else if (a === 'cancel-auto-explore') stopAutoExplore();
     else if (a === 'facility') openFacility(id);
     else if (a === 'open-panel') { state.selectedCharacter=id; state.scene='panel'; render(); }
     else if (a === 'open-character') { state.selectedCharacter=id; state.scene='party'; render(); }
     else if (a === 'view-character') showCharacterDetails(id);
     else if (a === 'unlock-panel') unlockPanel(id,target.dataset.panel);
+    else if (a === 'panel-select') { state.panelUi.selected[id]=target.dataset.panel; render(); }
+    else if (a === 'panel-branch') { state.panelUi.branch[id]=target.dataset.branch; state.panelUi.selected[id]=null; render(); }
+    else if (a === 'panel-unlock-selected') unlockPanel(id,target.dataset.panel);
     else if (a === 'quest-accept') { closeModal(); acceptQuest(id); }
     else if (a === 'quest-complete') { closeModal(); completeQuest(id); }
     else if (a === 'buy-item') { buyItem(id); if(modalLayer.classList.contains('open')) showShop(); }
@@ -920,6 +1064,7 @@
     else if (a === 'sell-item') { sellItem(id); if(modalLayer.classList.contains('open')) showSell(); }
     else if (a === 'rest') { closeModal(); restAtInn(); }
     else if (a === 'use-item-world') useItemOutside(id);
+    else if (a === 'use-stamina-item') useStaminaItem(id);
     else if (a === 'use-item-outside-target') useItemOutsideTarget(target.dataset.item,id);
     else if (a === 'battle-command') battleCommand(target.dataset.command);
     else if (a === 'battle-skill') useBattleSkill(id);
@@ -939,11 +1084,16 @@
     audio.resume(); audio.sfx('tap');
     const page=button.dataset.nav; state.scene=page; render();
   }));
-  document.getElementById('audioButton').addEventListener('click', toggleAudio);
+  document.getElementById('audioButton')?.addEventListener('click', toggleAudio);
   document.getElementById('saveButton').addEventListener('click', ()=>{ audio.resume(); audio.sfx('tap'); saveGame(true); });
   document.getElementById('menuButton').addEventListener('click', ()=>{ audio.resume(); audio.sfx('tap'); showSystemMenu(); });
   document.getElementById('homeButton').addEventListener('click', ()=>{audio.resume(); audio.sfx('tap'); state.scene='title';render();});
   modalLayer.addEventListener('click', (event) => { if(event.target === modalLayer) closeModal(); });
+
+  window.setInterval(() => {
+    const before=state.stamina?.current; refreshStamina();
+    if(state.stamina?.current!==before && state.scene!=='battle') { saveGame(); render(); }
+  }, 60000);
 
   render();
 })();

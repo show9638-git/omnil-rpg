@@ -1,10 +1,12 @@
-/* 全零〈オムニル〉 v0.3 data — 育成・自動化・習熟度の基盤 */
+/* 全零〈オムニル〉 v0.4 data — 冒険者レベル・スタミナ・依頼拡張 */
 window.OMNIL_DATA = (() => {
+  // 冒険者レベルはパーティ全体の進行度。スタミナ上限・施設品・行動範囲に影響する。
   const RANKS = [
-    { id: 'F', name: 'F級', threshold: 0, description: '駆け出しの冒険者。宿場町の近辺を任される。' },
-    { id: 'E', name: 'E級', threshold: 90, description: '一人前の入口。危険な遺跡への立入が許可される。' },
-    { id: 'D', name: 'D級', threshold: 240, description: '地域から信頼される冒険者。' },
-    { id: 'C', name: 'C級', threshold: 520, description: '地方を代表する実力者。' },
+    { id: '1', level: 1, name: 'Lv.1', threshold: 0, maxStamina: 60, description: 'ギルドに登録したばかり。リンドホルム近郊を任される。' },
+    { id: '2', level: 2, name: 'Lv.2', threshold: 100, maxStamina: 70, description: '近隣地域で信頼を得た冒険者。落星の遺構へ進める。' },
+    { id: '3', level: 3, name: 'Lv.3', threshold: 260, maxStamina: 80, description: '地域の依頼を任される実力者。' },
+    { id: '4', level: 4, name: 'Lv.4', threshold: 520, maxStamina: 90, description: '地方を代表する冒険者。白霜の関所への道が開く。' },
+    { id: '5', level: 5, name: 'Lv.5', threshold: 900, maxStamina: 100, description: '第一章の外へ踏み出せる、確かな名声を持つ。' },
   ];
 
   const ITEM_DEFS = {
@@ -17,6 +19,7 @@ window.OMNIL_DATA = (() => {
     potion: { id: 'potion', name: '癒しの小瓶', type: 'consumable', description: '仲間1人のHPを45回復する。', sell: 15, buy: 38, effect: { healHp: 45 } },
     ether: { id: 'ether', name: '澄んだ小瓶', type: 'consumable', description: '仲間1人のMPを18回復する。', sell: 18, buy: 55, effect: { healMp: 18 } },
     antidote: { id: 'antidote', name: '解毒草', type: 'consumable', description: '毒を治療し、HPを15回復する。', sell: 8, buy: 24, effect: { healHp: 15, cure: 'poison' } },
+    stamina_tonic: { id: 'stamina_tonic', name: '活力の小瓶', type: 'consumable', description: 'パーティのスタミナを25回復する。戦闘外で使う携行用の活力剤。', sell: 20, buy: 48, effect: { restoreStamina: 25 } },
   };
 
   const EQUIPMENT_DEFS = {
@@ -323,20 +326,35 @@ window.OMNIL_DATA = (() => {
   };
 
   const LOCATIONS = {
-    lindholm:{id:'lindholm',name:'宿場町リンドホルム',type:'town',x:24,y:70,rank:'F',description:'草原と森の境にある、小さな宿場町。冒険者ギルド《枝角亭》がある。',facilities:['guild','shop','craft','inn','sell']},
-    windy_plain:{id:'windy_plain',name:'風渡る草原',type:'field',x:43,y:62,rank:'F',description:'低い草と風の道が続く、リンドホルム近郊の草原。',enemyPool:['pale_slime','grass_hare','wind_wolf'],materialPool:['herb','herb','slime_core'],explorationCost:0},
-    whisper_woods:{id:'whisper_woods',name:'囁きの森',type:'field',x:62,y:39,rank:'F',description:'木々が不思議な音を立てる深い森。足を踏み外すと戻れない。',enemyPool:['wind_wolf','whisper_treant'],materialPool:['herb','bark','bark'],explorationCost:0},
-    fallen_ruins:{id:'fallen_ruins',name:'落星の遺構',type:'field',x:79,y:28,rank:'E',description:'星のように落ちた建造物が眠る遺構。危険な魔力反応がある。',enemyPool:['whisper_treant','ruin_sentinel'],materialPool:['old_fragment','old_fragment','prism_dust'],explorationCost:0},
-    frost_gate:{id:'frost_gate',name:'白霜の関所',type:'placeholder',x:75,y:77,rank:'D',description:'冷たい山域の入口。第一章の外にある。'},
+    lindholm:{id:'lindholm',name:'宿場町リンドホルム',type:'town',x:24,y:70,rank:'1',description:'草原と森の境にある、小さな宿場町。冒険者ギルド《枝角亭》がある。',facilities:['guild','shop','craft','inn','sell']},
+    windy_plain:{id:'windy_plain',name:'風渡る草原',type:'field',x:43,y:62,rank:'1',description:'低い草と風の道が続く、リンドホルム近郊の草原。',enemyPool:['pale_slime','grass_hare','wind_wolf'],materialPool:['herb','herb','slime_core'],explorationCost:3,battleCost:4},
+    whisper_woods:{id:'whisper_woods',name:'囁きの森',type:'field',x:62,y:39,rank:'1',description:'木々が不思議な音を立てる深い森。足を踏み外すと戻れない。',enemyPool:['wind_wolf','whisper_treant'],materialPool:['herb','bark','bark'],explorationCost:4,battleCost:5},
+    fallen_ruins:{id:'fallen_ruins',name:'落星の遺構',type:'field',x:79,y:28,rank:'2',description:'星のように落ちた建造物が眠る遺構。危険な魔力反応がある。',enemyPool:['whisper_treant','ruin_sentinel'],materialPool:['old_fragment','old_fragment','prism_dust'],explorationCost:5,battleCost:7},
+    frost_gate:{id:'frost_gate',name:'白霜の関所',type:'placeholder',x:75,y:77,rank:'4',description:'冷たい山域の入口。第一章の外にある。'},
   };
+
+  // single use = 一回限り。repeatable = 報告後に何度でも受注可能。
   const QUESTS = {
-    q_herb:{id:'q_herb',name:'薬草を届けて',rank:'F',description:'宿場町の治療師へ、草原の薬草を3つ届ける。',type:'collect',target:'herb',amount:3,reward:{gold:80,advExp:30,items:[{id:'potion',qty:1}]},unlockAt:0,dialogue:'「薬草が足りないんだ。風渡る草原で採れるはずだよ。」'},
-    q_wolf:{id:'q_wolf',name:'風を裂く牙',rank:'F',description:'街道を荒らす風斬りウルフを3体討伐する。',type:'kill',target:'wind_wolf',amount:3,reward:{gold:130,advExp:60,items:[{id:'ether',qty:1}]},unlockAt:0,dialogue:'「街道の荷馬車が襲われている。無理はするなよ。」'},
-    q_ruin:{id:'q_ruin',name:'落星の欠片',rank:'E',description:'落星の遺構で古びた石片を2つ回収する。',type:'collect',target:'old_fragment',amount:2,reward:{gold:260,advExp:70,items:[{id:'potion',qty:2},{id:'ether',qty:1}]},unlockAt:90,dialogue:'「遺構の調査団が素材を求めている。E級以上の依頼だ。」'},
-    q_boss:{id:'q_boss',name:'森の獣王',rank:'E',description:'囁きの森に現れた苔牙の獣王を討伐する。',type:'kill',target:'moss_wolf',amount:1,reward:{gold:420,advExp:95,items:[{id:'prism_dust',qty:2}]},unlockAt:90,dialogue:'「森の奥で、何かが縄張りを広げている。帰還を最優先にしてくれ。」'},
+    q_herb:{id:'q_herb',name:'薬草を届けて',rank:'1',description:'宿場町の治療師へ、草原の薬草を3つ届ける。',type:'collect',target:'herb',amount:3,reward:{gold:80,advExp:30,items:[{id:'potion',qty:1}]},unlockAt:0,dialogue:'「薬草が足りないんだ。風渡る草原で採れるはずだよ。」'},
+    q_wolf:{id:'q_wolf',name:'風を裂く牙',rank:'1',description:'街道を荒らす風斬りウルフを3体討伐する。',type:'kill',target:'wind_wolf',amount:3,reward:{gold:130,advExp:60,items:[{id:'ether',qty:1}]},unlockAt:0,dialogue:'「街道の荷馬車が襲われている。無理はするなよ。」'},
+    q_pale_core:{id:'q_pale_core',name:'淡光を集めて',rank:'1',description:'道具屋が淡光の核を2つ探している。',type:'collect',target:'slime_core',amount:2,reward:{gold:75,advExp:24,items:[{id:'stamina_tonic',qty:1}]},unlockAt:0,dialogue:'「核は小さくても、いい薬の材料になるんだ。」'},
+    q_bark:{id:'q_bark',name:'囁き樹の樹皮',rank:'1',description:'森の薬師へ、囁き樹の樹皮を3つ届ける。',type:'collect',target:'bark',amount:3,reward:{gold:150,advExp:38,items:[{id:'antidote',qty:2}]},unlockAt:40,dialogue:'「森の奥へ行くなら、足元を見失わないでね。」'},
+    q_ruin:{id:'q_ruin',name:'落星の欠片',rank:'2',description:'落星の遺構で古びた石片を2つ回収する。',type:'collect',target:'old_fragment',amount:2,reward:{gold:260,advExp:70,items:[{id:'potion',qty:2},{id:'ether',qty:1}]},unlockAt:100,dialogue:'「遺構の調査団が素材を求めている。危険なら引き返して。」'},
+    q_boss:{id:'q_boss',name:'森の獣王',rank:'2',description:'囁きの森に現れた苔牙の獣王を討伐する。',type:'kill',target:'moss_wolf',amount:1,reward:{gold:420,advExp:95,items:[{id:'prism_dust',qty:2},{id:'stamina_tonic',qty:2}]},unlockAt:100,dialogue:'「森の奥で、何かが縄張りを広げている。帰還を最優先にしてくれ。」'},
+    q_sentinel:{id:'q_sentinel',name:'遺構の番兵調査',rank:'2',description:'遺構の番兵を2体倒し、動きの記録を持ち帰る。',type:'kill',target:'ruin_sentinel',amount:2,reward:{gold:330,advExp:85,items:[{id:'ether',qty:2}]},unlockAt:140,dialogue:'「無理に奥まで行かなくていい。記録だけでも価値がある。」'},
+    q_prism:{id:'q_prism',name:'虹晶の反応',rank:'2',description:'虹晶の粉を2つ集め、ギルドの調査員へ渡す。',type:'collect',target:'prism_dust',amount:2,reward:{gold:370,advExp:90,items:[{id:'stamina_tonic',qty:2}]},unlockAt:180,dialogue:'「その粉は、君たちの力に妙に反応するらしい。」'},
+
+    r_herb:{id:'r_herb',name:'【繰返】草原の薬草採取',rank:'1',repeatable:true,description:'草原の薬草を2つ納品する。',type:'collect',target:'herb',amount:2,reward:{gold:34,advExp:9},unlockAt:0,dialogue:'毎日必要になる、基本的な薬草採取依頼。'},
+    r_slime:{id:'r_slime',name:'【繰返】淡光の核の回収',rank:'1',repeatable:true,description:'淡光スライムの核を2つ納品する。',type:'collect',target:'slime_core',amount:2,reward:{gold:42,advExp:10},unlockAt:0,dialogue:'道具屋と治療師が常に核を求めている。'},
+    r_wolf:{id:'r_wolf',name:'【繰返】街道の見回り',rank:'1',repeatable:true,description:'風斬りウルフを2体討伐し、街道の安全を確保する。',type:'kill',target:'wind_wolf',amount:2,reward:{gold:62,advExp:13},unlockAt:0,dialogue:'街道の護衛から回ってきた常設依頼。'},
+    r_bark:{id:'r_bark',name:'【繰返】森の素材便',rank:'1',repeatable:true,description:'囁き樹の樹皮を2つ納品する。',type:'collect',target:'bark',amount:2,reward:{gold:76,advExp:15,items:[{id:'antidote',qty:1}]},unlockAt:30,dialogue:'森の薬師からの定期依頼。'},
+    r_treant:{id:'r_treant',name:'【繰返】森道の整備',rank:'2',repeatable:true,description:'囁きの若木を2体討伐し、通行路を確保する。',type:'kill',target:'whisper_treant',amount:2,reward:{gold:110,advExp:20},unlockAt:100,dialogue:'伐採ではなく、危険個体だけを退ける依頼。'},
+    r_ruin:{id:'r_ruin',name:'【繰返】遺構の石片回収',rank:'2',repeatable:true,description:'古びた石片を2つ納品する。',type:'collect',target:'old_fragment',amount:2,reward:{gold:115,advExp:22},unlockAt:100,dialogue:'調査団が継続して募集している回収依頼。'},
+    r_sentinel:{id:'r_sentinel',name:'【繰返】番兵の機能停止',rank:'2',repeatable:true,description:'遺構の番兵を1体停止させる。',type:'kill',target:'ruin_sentinel',amount:1,reward:{gold:128,advExp:25,items:[{id:'stamina_tonic',qty:1}]},unlockAt:120,dialogue:'遺構の入口付近で行う、危険度の高い常設依頼。'},
   };
   const RECIPES = {
     potion_bundle:{id:'potion_bundle',name:'癒しの小瓶 ×2',description:'薬草を煎じ、携行用の回復薬にする。',ingredients:[{id:'herb',qty:3},{id:'slime_core',qty:1}],output:{type:'item',id:'potion',qty:2}},
+    stamina_tonic:{id:'stamina_tonic',name:'活力の小瓶',description:'旅用の活力剤。パーティのスタミナを25回復する。',ingredients:[{id:'herb',qty:2},{id:'slime_core',qty:1}],output:{type:'item',id:'stamina_tonic',qty:1}},
     rainbow_edge:{id:'rainbow_edge',name:'調律の刃片',description:'虹全の攻撃力を+3。作成時に自動装備する。',ingredients:[{id:'wolf_fang',qty:2},{id:'prism_dust',qty:1}],output:{type:'equipment',id:'rainbow_edge',qty:1}},
     white_charm:{id:'white_charm',name:'守りの護符',description:'白零の防御力+3、最大HP+8。作成時に自動装備する。',ingredients:[{id:'bark',qty:2},{id:'herb',qty:2}],output:{type:'equipment',id:'white_charm',qty:1}},
     black_ring:{id:'black_ring',name:'侵食の指輪',description:'黒零の魔力+3、敏捷+1。作成時に自動装備する。',ingredients:[{id:'old_fragment',qty:2},{id:'slime_core',qty:2}],output:{type:'equipment',id:'black_ring',qty:1}},
