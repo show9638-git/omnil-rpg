@@ -1,12 +1,17 @@
-/* 全零〈オムニル〉 v0.4 data — 冒険者レベル・スタミナ・依頼拡張 */
+/* 全零〈オムニル〉 v0.5 data — 地方地図・探索難易度・冒険者レベル */
 window.OMNIL_DATA = (() => {
   // 冒険者レベルはパーティ全体の進行度。スタミナ上限・施設品・行動範囲に影響する。
   const RANKS = [
-    { id: '1', level: 1, name: 'Lv.1', threshold: 0, maxStamina: 60, description: 'ギルドに登録したばかり。リンドホルム近郊を任される。' },
-    { id: '2', level: 2, name: 'Lv.2', threshold: 100, maxStamina: 70, description: '近隣地域で信頼を得た冒険者。落星の遺構へ進める。' },
-    { id: '3', level: 3, name: 'Lv.3', threshold: 260, maxStamina: 80, description: '地域の依頼を任される実力者。' },
-    { id: '4', level: 4, name: 'Lv.4', threshold: 520, maxStamina: 90, description: '地方を代表する冒険者。白霜の関所への道が開く。' },
-    { id: '5', level: 5, name: 'Lv.5', threshold: 900, maxStamina: 100, description: '第一章の外へ踏み出せる、確かな名声を持つ。' },
+    { id: '1', level: 1, name: 'Lv.1', threshold: 0, maxStamina: 100, description: 'ギルドに登録したばかり。リンドホルム近郊を任される。' },
+    { id: '2', level: 2, name: 'Lv.2', threshold: 100, maxStamina: 150, description: '近隣地域で信頼を得た冒険者。中級探索と落星の遺構へ進める。' },
+    { id: '3', level: 3, name: 'Lv.3', threshold: 260, maxStamina: 200, description: '地方の依頼を任される実力者。上級探索に挑める。' },
+    { id: '4', level: 4, name: 'Lv.4', threshold: 520, maxStamina: 250, description: '地方を代表する冒険者。白霜の関所への道が開く。' },
+    { id: '5', level: 5, name: 'Lv.5', threshold: 900, maxStamina: 300, description: '第一章の外へ踏み出せる、確かな名声を持つ。' },
+    { id: '6', level: 6, name: 'Lv.6', threshold: 1400, maxStamina: 350, description: '複数の地方から指名依頼が届き始める。' },
+    { id: '7', level: 7, name: 'Lv.7', threshold: 2050, maxStamina: 400, description: '危険地帯の調査を任される冒険者。' },
+    { id: '8', level: 8, name: 'Lv.8', threshold: 2850, maxStamina: 450, description: '地方ギルドでも名を知られる熟練者。' },
+    { id: '9', level: 9, name: 'Lv.9', threshold: 3800, maxStamina: 500, description: '大規模な討伐・護衛を担う一流の冒険者。' },
+    { id: '10', level: 10, name: 'Lv.10', threshold: 5000, maxStamina: 550, description: '世界規模の依頼へ進むための第一の到達点。' },
   ];
 
   const ITEM_DEFS = {
@@ -19,7 +24,7 @@ window.OMNIL_DATA = (() => {
     potion: { id: 'potion', name: '癒しの小瓶', type: 'consumable', description: '仲間1人のHPを45回復する。', sell: 15, buy: 38, effect: { healHp: 45 } },
     ether: { id: 'ether', name: '澄んだ小瓶', type: 'consumable', description: '仲間1人のMPを18回復する。', sell: 18, buy: 55, effect: { healMp: 18 } },
     antidote: { id: 'antidote', name: '解毒草', type: 'consumable', description: '毒を治療し、HPを15回復する。', sell: 8, buy: 24, effect: { healHp: 15, cure: 'poison' } },
-    stamina_tonic: { id: 'stamina_tonic', name: '活力の小瓶', type: 'consumable', description: 'パーティのスタミナを25回復する。戦闘外で使う携行用の活力剤。', sell: 20, buy: 48, effect: { restoreStamina: 25 } },
+    stamina_tonic: { id: 'stamina_tonic', name: '活力の小瓶', type: 'consumable', description: 'パーティのスタミナを25回復する。上限を超えて回復できる携行用の活力剤。', sell: 20, buy: 48, effect: { restoreStamina: 25, allowOvercap: true } },
   };
 
   const EQUIPMENT_DEFS = {
@@ -327,10 +332,17 @@ window.OMNIL_DATA = (() => {
 
   const LOCATIONS = {
     lindholm:{id:'lindholm',name:'宿場町リンドホルム',type:'town',x:24,y:70,rank:'1',description:'草原と森の境にある、小さな宿場町。冒険者ギルド《枝角亭》がある。',facilities:['guild','shop','craft','inn','sell']},
-    windy_plain:{id:'windy_plain',name:'風渡る草原',type:'field',x:43,y:62,rank:'1',description:'低い草と風の道が続く、リンドホルム近郊の草原。',enemyPool:['pale_slime','grass_hare','wind_wolf'],materialPool:['herb','herb','slime_core'],explorationCost:3,battleCost:4},
-    whisper_woods:{id:'whisper_woods',name:'囁きの森',type:'field',x:62,y:39,rank:'1',description:'木々が不思議な音を立てる深い森。足を踏み外すと戻れない。',enemyPool:['wind_wolf','whisper_treant'],materialPool:['herb','bark','bark'],explorationCost:4,battleCost:5},
-    fallen_ruins:{id:'fallen_ruins',name:'落星の遺構',type:'field',x:79,y:28,rank:'2',description:'星のように落ちた建造物が眠る遺構。危険な魔力反応がある。',enemyPool:['whisper_treant','ruin_sentinel'],materialPool:['old_fragment','old_fragment','prism_dust'],explorationCost:5,battleCost:7},
+    windy_plain:{id:'windy_plain',name:'風渡る草原',type:'field',x:43,y:62,rank:'1',description:'低い草と風の道が続く、リンドホルム近郊の草原。',enemyPool:['pale_slime','grass_hare','wind_wolf'],materialPool:['herb','herb','slime_core'],rareMaterialPool:['slime_core','wolf_fang']},
+    whisper_woods:{id:'whisper_woods',name:'囁きの森',type:'field',x:62,y:39,rank:'1',description:'木々が不思議な音を立てる深い森。足を踏み外すと戻れない。',enemyPool:['wind_wolf','whisper_treant'],materialPool:['herb','bark','bark'],rareMaterialPool:['wolf_fang','bark']},
+    fallen_ruins:{id:'fallen_ruins',name:'落星の遺構',type:'field',x:79,y:28,rank:'2',description:'星のように落ちた建造物が眠る遺構。危険な魔力反応がある。',enemyPool:['whisper_treant','ruin_sentinel'],materialPool:['old_fragment','old_fragment','prism_dust'],rareMaterialPool:['prism_dust','old_fragment']},
     frost_gate:{id:'frost_gate',name:'白霜の関所',type:'placeholder',x:75,y:77,rank:'4',description:'冷たい山域の入口。第一章の外にある。'},
+  };
+
+  // 地点ごとの探索難易度。敵の強さ・数、素材量、希少素材の発見率、経験値と所持金が変化する。
+  const EXPLORATION_DIFFICULTIES = {
+    beginner: { id:'beginner', name:'初級探索', rank:'1', explorationCost:1, battleCost:3, enemyCount:[1,1], enemyStatMultiplier:.92, rewardMultiplier:1.0, lootMultiplier:1.0, rareChance:0.02, description:'低危険度。敵は単体中心で、基礎素材を安全に集めやすい。' },
+    intermediate: { id:'intermediate', name:'中級探索', rank:'2', explorationCost:3, battleCost:5, enemyCount:[1,2], enemyStatMultiplier:1.22, rewardMultiplier:1.45, lootMultiplier:1.65, rareChance:0.18, description:'敵は強くなり、複数出現もある。素材量・報酬効率が上がる。' },
+    advanced: { id:'advanced', name:'上級探索', rank:'3', explorationCost:5, battleCost:10, enemyCount:[2,3], enemyStatMultiplier:1.58, rewardMultiplier:2.15, lootMultiplier:2.45, rareChance:0.38, description:'強敵・複数戦が前提。希少素材と高い経験値・所持金を狙える。' },
   };
 
   // single use = 一回限り。repeatable = 報告後に何度でも受注可能。
@@ -343,6 +355,12 @@ window.OMNIL_DATA = (() => {
     q_boss:{id:'q_boss',name:'森の獣王',rank:'2',description:'囁きの森に現れた苔牙の獣王を討伐する。',type:'kill',target:'moss_wolf',amount:1,reward:{gold:420,advExp:95,items:[{id:'prism_dust',qty:2},{id:'stamina_tonic',qty:2}]},unlockAt:100,dialogue:'「森の奥で、何かが縄張りを広げている。帰還を最優先にしてくれ。」'},
     q_sentinel:{id:'q_sentinel',name:'遺構の番兵調査',rank:'2',description:'遺構の番兵を2体倒し、動きの記録を持ち帰る。',type:'kill',target:'ruin_sentinel',amount:2,reward:{gold:330,advExp:85,items:[{id:'ether',qty:2}]},unlockAt:140,dialogue:'「無理に奥まで行かなくていい。記録だけでも価値がある。」'},
     q_prism:{id:'q_prism',name:'虹晶の反応',rank:'2',description:'虹晶の粉を2つ集め、ギルドの調査員へ渡す。',type:'collect',target:'prism_dust',amount:2,reward:{gold:370,advExp:90,items:[{id:'stamina_tonic',qty:2}]},unlockAt:180,dialogue:'「その粉は、君たちの力に妙に反応するらしい。」'},
+    q_hare:{id:'q_hare',name:'草駆けの足跡',rank:'1',description:'畑を荒らす草駆けラビットを4体討伐する。',type:'kill',target:'grass_hare',amount:4,reward:{gold:95,advExp:28,items:[{id:'antidote',qty:1}]},unlockAt:0,dialogue:'「畑の芽を食べられてしまうんだ。追い払いでは足りなくてね。」'},
+    q_road:{id:'q_road',name:'風の街道を守れ',rank:'1',description:'風斬りウルフを5体討伐し、街道の安全を取り戻す。',type:'kill',target:'wind_wolf',amount:5,reward:{gold:190,advExp:52,items:[{id:'potion',qty:2}]},unlockAt:55,dialogue:'「荷馬車が通れるよう、道を空けてほしい。」'},
+    q_treant:{id:'q_treant',name:'森道の障害',rank:'2',description:'囁きの若木を3体退け、森の通行路を確保する。',type:'kill',target:'whisper_treant',amount:3,reward:{gold:245,advExp:64,items:[{id:'stamina_tonic',qty:1}]},unlockAt:100,dialogue:'「倒木ではない。動く木が道を塞いでいるんだ。」'},
+    q_wolf_fang:{id:'q_wolf_fang',name:'鍛冶師の求める牙',rank:'1',description:'鍛冶師へ風牙を4つ納品する。',type:'collect',target:'wolf_fang',amount:4,reward:{gold:165,advExp:42,items:[{id:'ether',qty:1}]},unlockAt:45,dialogue:'「風牙のしなりは、細工にちょうどいい。」'},
+    q_ruin_route:{id:'q_ruin_route',name:'遺構への案内板',rank:'2',description:'古びた石片を4つ集め、危険な通路を示す案内板を補修する。',type:'collect',target:'old_fragment',amount:4,reward:{gold:390,advExp:92,items:[{id:'stamina_tonic',qty:2}]},unlockAt:150,dialogue:'「調査団が迷わないよう、目印を作り直したい。」'},
+
 
     r_herb:{id:'r_herb',name:'【繰返】草原の薬草採取',rank:'1',repeatable:true,description:'草原の薬草を2つ納品する。',type:'collect',target:'herb',amount:2,reward:{gold:34,advExp:9},unlockAt:0,dialogue:'毎日必要になる、基本的な薬草採取依頼。'},
     r_slime:{id:'r_slime',name:'【繰返】淡光の核の回収',rank:'1',repeatable:true,description:'淡光スライムの核を2つ納品する。',type:'collect',target:'slime_core',amount:2,reward:{gold:42,advExp:10},unlockAt:0,dialogue:'道具屋と治療師が常に核を求めている。'},
@@ -351,6 +369,10 @@ window.OMNIL_DATA = (() => {
     r_treant:{id:'r_treant',name:'【繰返】森道の整備',rank:'2',repeatable:true,description:'囁きの若木を2体討伐し、通行路を確保する。',type:'kill',target:'whisper_treant',amount:2,reward:{gold:110,advExp:20},unlockAt:100,dialogue:'伐採ではなく、危険個体だけを退ける依頼。'},
     r_ruin:{id:'r_ruin',name:'【繰返】遺構の石片回収',rank:'2',repeatable:true,description:'古びた石片を2つ納品する。',type:'collect',target:'old_fragment',amount:2,reward:{gold:115,advExp:22},unlockAt:100,dialogue:'調査団が継続して募集している回収依頼。'},
     r_sentinel:{id:'r_sentinel',name:'【繰返】番兵の機能停止',rank:'2',repeatable:true,description:'遺構の番兵を1体停止させる。',type:'kill',target:'ruin_sentinel',amount:1,reward:{gold:128,advExp:25,items:[{id:'stamina_tonic',qty:1}]},unlockAt:120,dialogue:'遺構の入口付近で行う、危険度の高い常設依頼。'},
+    r_hare:{id:'r_hare',name:'【繰返】畑の見回り',rank:'1',repeatable:true,description:'草駆けラビットを2体討伐する。',type:'kill',target:'grass_hare',amount:2,reward:{gold:32,advExp:8},unlockAt:0,dialogue:'農家から毎朝届く、小さな見回り依頼。'},
+    r_fang:{id:'r_fang',name:'【繰返】風牙の納品',rank:'1',repeatable:true,description:'風牙を2つ納品する。',type:'collect',target:'wolf_fang',amount:2,reward:{gold:56,advExp:12},unlockAt:35,dialogue:'鍛冶師が常に募集している素材納品。'},
+    r_prism:{id:'r_prism',name:'【繰返】虹晶の粉の調達',rank:'2',repeatable:true,description:'虹晶の粉を1つ納品する。',type:'collect',target:'prism_dust',amount:1,reward:{gold:94,advExp:21},unlockAt:150,dialogue:'調査員の研究用に、少量ずつ必要になる。'},
+    r_ruin_watch:{id:'r_ruin_watch',name:'【繰返】遺構入口の安全確認',rank:'2',repeatable:true,description:'遺構の番兵を2体討伐する。',type:'kill',target:'ruin_sentinel',amount:2,reward:{gold:210,advExp:38,items:[{id:'ether',qty:1}]},unlockAt:180,dialogue:'入口だけを安全に保つための継続依頼。'},
   };
   const RECIPES = {
     potion_bundle:{id:'potion_bundle',name:'癒しの小瓶 ×2',description:'薬草を煎じ、携行用の回復薬にする。',ingredients:[{id:'herb',qty:3},{id:'slime_core',qty:1}],output:{type:'item',id:'potion',qty:2}},
@@ -360,5 +382,5 @@ window.OMNIL_DATA = (() => {
     black_ring:{id:'black_ring',name:'侵食の指輪',description:'黒零の魔力+3、敏捷+1。作成時に自動装備する。',ingredients:[{id:'old_fragment',qty:2},{id:'slime_core',qty:2}],output:{type:'equipment',id:'black_ring',qty:1}},
   };
 
-  return { RANKS, ITEM_DEFS, EQUIPMENT_DEFS, CHARACTER_DEFS, SKILLS, PASSIVES, ENEMIES, LOCATIONS, QUESTS, RECIPES };
+  return { RANKS, ITEM_DEFS, EQUIPMENT_DEFS, CHARACTER_DEFS, SKILLS, PASSIVES, ENEMIES, LOCATIONS, EXPLORATION_DIFFICULTIES, QUESTS, RECIPES };
 })();
