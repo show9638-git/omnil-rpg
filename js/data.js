@@ -1,4 +1,4 @@
-/* 全零〈オムニル〉 prototype data — 外部素材なしで動く、拡張前提の定義ファイル */
+/* 全零〈オムニル〉 v0.3 data — 育成・自動化・習熟度の基盤 */
 window.OMNIL_DATA = (() => {
   const RANKS = [
     { id: 'F', name: 'F級', threshold: 0, description: '駆け出しの冒険者。宿場町の近辺を任される。' },
@@ -25,98 +25,322 @@ window.OMNIL_DATA = (() => {
     black_ring: { id: 'black_ring', name: '侵食の指輪', target: 'black', slot: 'ring', description: '黒零の魔力を+3、敏捷を+1する。', stats: { mag: 3, agi: 1 } },
   };
 
-  const CHARACTER_DEFS = {
+  const BASE_CHARACTERS = {
     rainbow: {
-      id: 'rainbow', name: '虹全〈コウゼン〉', short: '虹全', subtitle: 'カオス／調律の半神', role: '調律・連携',
-      color: 'rainbow', portrait: 'rainbow',
+      id: 'rainbow', name: '虹全〈コウゼン〉', short: '虹全', subtitle: 'カオス／調律の継承者', role: '調律・連携', color: 'rainbow', portrait: 'rainbow',
       base: { maxHp: 104, maxMp: 28, atk: 15, def: 10, mag: 11, agi: 10, luck: 7 },
       growth: { maxHp: 14, maxMp: 4, atk: 3, def: 2, mag: 2, agi: 2, luck: 1 },
-      trait: { name: 'カオスの均衡', description: 'HPが半分以下の時、与えるダメージと受ける回復量が10%上昇する。' },
-      intro: '「命令を確認。……だが、これは俺が選ぶ。」',
-      starterSkills: ['rainbow_slash'],
-      panels: [
-        { id: 'r_core', name: '調律核', category: 'trait', cost: 0, prerequisite: null, description: '白と黒の力を安定させる核。基礎パネル。', effect: { maxMp: 4 } },
-        { id: 'r_strength', name: '境界の剣腕', category: 'stat', cost: 1, prerequisite: 'r_core', description: '攻撃力+3。', effect: { atk: 3 } },
-        { id: 'r_flow', name: '色彩の歩法', category: 'stat', cost: 1, prerequisite: 'r_core', description: '敏捷+2、最大HP+6。', effect: { agi: 2, maxHp: 6 } },
-        { id: 'r_resonance', name: '彩虹の共鳴', category: 'skill', cost: 2, prerequisite: 'r_strength', minLevel: 3, storyFlag: 'choice', description: '全体を整える調律技「共鳴波」を習得。', skill: 'resonance_wave' },
-        { id: 'r_balance', name: '天秤の意思', category: 'stat', cost: 2, prerequisite: 'r_flow', minLevel: 4, description: '防御+3、魔力+2。', effect: { def: 3, mag: 2 } },
+      intro: '「無理はするな。危なくなったら、すぐ引く。……俺たちは、ちゃんと帰ろう。」',
+      teriosName: 'カオス・テリオス',
+      traits: [
+        { id: 'r_trait_balance', name: 'カオスの均衡', description: 'HPが50%以下の時、与ダメージと回復量が10%上昇する。', effect: 'low_hp_boost' },
+        { id: 'r_trait_resonance', name: '三彩の共鳴', description: '味方への強化と敵への弱体の持続ターンを+1する。', effect: 'duration_plus' },
+        { id: 'r_trait_cycle', name: '始終の循環', description: '自分が技を使った後、HPとMPを最大値の2%回復する。', effect: 'skill_cycle' },
       ],
     },
     white: {
-      id: 'white', name: '白零〈ハクレイ〉', short: '白零', subtitle: 'アルファ／白の器', role: '守護・回復',
-      color: 'white', portrait: 'white',
+      id: 'white', name: '白零〈ハクレイ〉', short: '白零', subtitle: 'アルファ／調律の継承者', role: '回復・祝福', color: 'white', portrait: 'white',
       base: { maxHp: 96, maxMp: 38, atk: 10, def: 12, mag: 15, agi: 8, luck: 8 },
       growth: { maxHp: 12, maxMp: 6, atk: 2, def: 3, mag: 3, agi: 1, luck: 1 },
-      trait: { name: '白の器', description: '戦闘終了時、最もHPが低い仲間を最大HPの5%だけ回復する。' },
-      intro: '「損傷を抑制します。……それが、必要なのですね。」',
-      starterSkills: ['white_blessing'],
-      panels: [
-        { id: 'w_core', name: '再生の器', category: 'trait', cost: 0, prerequisite: null, description: '始まり・再生・祝福を宿す基礎パネル。', effect: { maxMp: 5 } },
-        { id: 'w_guard', name: '白壁の構え', category: 'stat', cost: 1, prerequisite: 'w_core', description: '防御+3、最大HP+8。', effect: { def: 3, maxHp: 8 } },
-        { id: 'w_focus', name: '祝福の息吹', category: 'stat', cost: 1, prerequisite: 'w_core', description: '魔力+3、最大MP+5。', effect: { mag: 3, maxMp: 5 } },
-        { id: 'w_protect', name: '「守りたい」', category: 'skill', cost: 2, prerequisite: 'w_guard', minLevel: 3, storyFlag: 'protect', description: '味方をかばう「白光の護り」を習得。', skill: 'white_guard' },
-        { id: 'w_mercy', name: '静かな祈り', category: 'skill', cost: 2, prerequisite: 'w_focus', minLevel: 4, description: '全体回復「静謐の祈り」を習得。', skill: 'quiet_prayer' },
+      intro: '「……わかった。私が前に出る。傷ついたら、言って。」',
+      teriosName: 'アルファ・テリオス',
+      traits: [
+        { id: 'w_trait_pulse', name: '生命の脈動', description: '戦闘終了時、最もHPが低い仲間を最大HPの8%回復する。', effect: 'post_battle_heal' },
+        { id: 'w_trait_mercy', name: '慈護の本能', description: 'かばって受けるダメージをさらに15%軽減する。', effect: 'guard_reduction' },
+        { id: 'w_trait_chain', name: '祝福の連鎖', description: '白零の回復技は、対象に1ターンの再生を付与する。', effect: 'heal_regen' },
       ],
     },
     black: {
-      id: 'black', name: '黒零〈コクレイ〉', short: '黒零', subtitle: 'オメガ／黒の器', role: '破壊・弱体',
-      color: 'black', portrait: 'black',
+      id: 'black', name: '黒零〈コクレイ〉', short: '黒零', subtitle: 'オメガ／調律の継承者', role: '破壊・妨害', color: 'black', portrait: 'black',
       base: { maxHp: 100, maxMp: 30, atk: 16, def: 9, mag: 13, agi: 11, luck: 6 },
       growth: { maxHp: 13, maxMp: 5, atk: 3, def: 2, mag: 3, agi: 2, luck: 1 },
-      trait: { name: '終焉の残響', description: '弱体状態の敵へ与えるダメージが15%上昇する。' },
-      intro: '「障害を排除する。……触れるな。」',
-      starterSkills: ['black_cut'],
-      panels: [
-        { id: 'b_core', name: '終焉の器', category: 'trait', cost: 0, prerequisite: null, description: '破壊・終焉・侵食を宿す基礎パネル。', effect: { atk: 1, maxMp: 4 } },
-        { id: 'b_fang', name: '黒刃の研磨', category: 'stat', cost: 1, prerequisite: 'b_core', description: '攻撃力+3。', effect: { atk: 3 } },
-        { id: 'b_hex', name: '侵食の知覚', category: 'stat', cost: 1, prerequisite: 'b_core', description: '魔力+3、敏捷+1。', effect: { mag: 3, agi: 1 } },
-        { id: 'b_anger', name: '「壊したくない」', category: 'skill', cost: 2, prerequisite: 'b_fang', minLevel: 3, storyFlag: 'anger', description: '防御を崩す「終末の楔」を習得。', skill: 'ruin_wedge' },
-        { id: 'b_shade', name: '影を裂く者', category: 'skill', cost: 2, prerequisite: 'b_hex', minLevel: 4, description: '全体へ侵食を広げる「夜蝕」を習得。', skill: 'night_eclipse' },
+      intro: '「邪魔なら、退かせる。……二人には、触れさせない。」',
+      teriosName: 'オメガ・テリオス',
+      traits: [
+        { id: 'b_trait_echo', name: '終焉の残響', description: '弱体状態の敵へ与えるダメージが15%上昇する。', effect: 'debuff_damage' },
+        { id: 'b_trait_cut', name: '断絶の刻', description: '黒零の攻撃技は20%で「防御低下」を1ターン追加する。', effect: 'fracture_chance' },
+        { id: 'b_trait_hunger', name: '黒夜の収奪', description: '敵を倒した時、最大MPの6%を回復する。', effect: 'kill_mp' },
       ],
     },
   };
 
-  const SKILLS = {
-    rainbow_slash: { id: 'rainbow_slash', name: '調律斬', owner: 'rainbow', mp: 5, target: 'enemy', power: 1.55, kind: 'physical', description: '虹の残光をまとった一撃。与ダメージの20%だけ自分を回復する。', lifeSteal: 0.2 },
-    resonance_wave: { id: 'resonance_wave', name: '共鳴波', owner: 'rainbow', mp: 10, target: 'allAllies', kind: 'heal', heal: 0.38, description: '全員のHPを最大HPの38%回復し、弱体を1つ取り除く。' },
-    white_blessing: { id: 'white_blessing', name: '白光の加護', owner: 'white', mp: 6, target: 'ally', kind: 'heal', heal: 0.43, description: '味方1人のHPを最大HPの43%回復する。' },
-    white_guard: { id: 'white_guard', name: '白光の護り', owner: 'white', mp: 8, target: 'ally', kind: 'guard', description: '味方1人を2ターンかばい、防御力を上昇させる。' },
-    quiet_prayer: { id: 'quiet_prayer', name: '静謐の祈り', owner: 'white', mp: 12, target: 'allAllies', kind: 'heal', heal: 0.27, description: '全員のHPを最大HPの27%回復する。' },
-    black_cut: { id: 'black_cut', name: '漆黒刃', owner: 'black', mp: 5, target: 'enemy', power: 1.45, kind: 'physical', description: '敵へ侵食を刻む黒き一閃。2ターン、防御を低下させる。', inflict: { type: 'fracture', turns: 2 } },
-    ruin_wedge: { id: 'ruin_wedge', name: '終末の楔', owner: 'black', mp: 8, target: 'enemy', power: 1.8, kind: 'magic', description: '防御を破る楔を打ち込む。侵食中の敵には威力上昇。', bonusOnDebuff: 0.35 },
-    night_eclipse: { id: 'night_eclipse', name: '夜蝕', owner: 'black', mp: 11, target: 'enemy', power: 1.25, kind: 'magic', description: '敵全体を蝕む影。敵が複数いる場合に威力を発揮する。', inflict: { type: 'fracture', turns: 2 } },
+  const SKILLS = {};
+  const PASSIVES = {};
+
+  function addSkill(owner, id, name, mp, target, kind, description, extra = {}) {
+    SKILLS[id] = {
+      id, owner, name, mp, target, kind, description,
+      mastery: { powerRate: kind === 'heal' || kind === 'support' ? 0.08 : 0.11, level3: '効果量+10%', level6: '効果量+30%・持続+1', level10: '極意効果を発動' },
+      ...extra,
+    };
+  }
+  function addPassive(owner, id, name, description, extra = {}) { PASSIVES[id] = { id, owner, name, description, ...extra }; }
+
+  // 虹全：始まり 8／終わり 8／調律 8／原初 6 = 技30
+  [
+    ['r_start_01','再生の灯',5,'ally','heal','味方1人を回復し、再生を付与。',{heal:.30, regen:2}],
+    ['r_start_02','命脈接続',7,'ally','support','味方1人を回復し、攻撃・魔力を上昇。',{heal:.22,buffs:{atk:1,mag:1},turns:2}],
+    ['r_start_03','芽吹きの風',9,'allAllies','heal','仲間全員のHPを回復。',{heal:.20}],
+    ['r_start_04','新星の祝福',10,'allAllies','support','仲間全員の攻撃・魔力を上昇。',{buffs:{atk:1,mag:1},turns:3}],
+    ['r_start_05','白虹の環',11,'allAllies','support','仲間全員に再生と防御上昇を付与。',{regen:3,buffs:{def:1},turns:2}],
+    ['r_start_06','活性転写',8,'ally','support','味方のHPとMPを回復し、弱体を解除。',{heal:.18,mpHeal:.16,cleanse:true}],
+    ['r_start_07','始源の抱擁',16,'ally','heal','戦闘不能の味方を復帰させ、大きく回復。',{heal:.48,revive:true}],
+    ['r_start_08','創生の彼方',22,'allAllies','heal','全体回復・再生・全弱体解除。',{heal:.43,regen:4,cleanse:true}],
+  ].forEach((x)=>addSkill('rainbow',...x));
+  [
+    ['r_end_01','終端斬',5,'enemy','physical','敵単体を斬り、防御低下を刻む。',{power:1.45,debuff:{fracture:2}}],
+    ['r_end_02','灰滅の印',7,'enemy','magic','敵単体に侵食を付与。',{power:1.18,debuff:{weaken:2}}],
+    ['r_end_03','虚無断ち',8,'enemy','physical','弱体中の敵に威力が上がる斬撃。',{power:1.70,bonusOnDebuff:.28}],
+    ['r_end_04','黒虹の楔',10,'enemy','magic','敵の防御と攻撃を同時に低下。',{power:1.42,debuff:{fracture:2,weaken:2}}],
+    ['r_end_05','停止領域',12,'allEnemies','support','敵全体の敏捷を下げ、行動を鈍らせる。',{debuff:{slow:3}}],
+    ['r_end_06','破滅の輪',14,'allEnemies','magic','敵全体を蝕む終焉の輪。',{power:1.28,debuff:{fracture:2}}],
+    ['r_end_07','最後の審判',18,'enemy','magic','弱体数に応じて威力が上がる裁定。',{power:2.28,bonusOnDebuff:.44}],
+    ['r_end_08','終焉の彼方',24,'allEnemies','magic','敵全体へ大ダメージと複数弱体。',{power:2.02,debuff:{fracture:3,weaken:3,slow:2}}],
+  ].forEach((x)=>addSkill('rainbow',...x));
+  [
+    ['r_tune_01','調律斬',5,'enemy','physical','虹の残光をまとった一撃。与ダメージの一部を吸収。',{power:1.52,lifeSteal:.20}],
+    ['r_tune_02','反転障壁',7,'allAllies','support','仲間全員に小さな障壁を張る。',{barrier:.13,turns:2}],
+    ['r_tune_03','均衡の拍動',8,'allAllies','support','HP割合が低い仲間ほど大きく回復。',{heal:.23,balanceHeal:true}],
+    ['r_tune_04','位相転移',10,'self','support','自身の防御・敏捷を上げ、次に受ける攻撃を軽減。',{buffs:{def:2,agi:2},barrier:.22,turns:2}],
+    ['r_tune_05','連環の盾',12,'allAllies','support','仲間全員を1ターンかばい合う結界。',{barrier:.20,buffs:{def:1},turns:2}],
+    ['r_tune_06','調律解除',11,'allAllies','support','仲間全員の弱体を解除し、MPを回復。',{cleanse:true,mpHeal:.14}],
+    ['r_tune_07','三相結界',18,'allAllies','support','全体に強力な障壁と防御上昇。',{barrier:.32,buffs:{def:2},turns:3}],
+    ['r_tune_08','調律の彼方',23,'allAllies','support','味方を整え、敵全体の強化を消す。',{heal:.28,cleanse:true,barrier:.20,dispel:true}],
+  ].forEach((x)=>addSkill('rainbow',...x));
+  [
+    ['r_origin_01','原初の脈動',18,'allAllies','support','全体回復、全能力上昇、弱体解除。',{heal:.30,buffs:{atk:1,def:1,mag:1,agi:1},cleanse:true,turns:3}],
+    ['r_origin_02','全色展開',20,'allEnemies','magic','敵全体に白黒虹の連続魔力。',{power:1.80,debuff:{fracture:2,weaken:2}}],
+    ['r_origin_03','無限連鎖',22,'allAllies','support','全体に再生・障壁・MP回復。',{regen:4,barrier:.24,mpHeal:.15,turns:3}],
+    ['r_origin_04','始終反転',24,'enemy','special','敵の強化を奪い、味方全員へ還元する。',{power:2.05,dispel:true,stealBuff:true,heal:.12}],
+    ['r_origin_05','世界律の壁',28,'allAllies','support','全体に極大障壁。1度だけ致死ダメージを耐える。',{barrier:.55,turns:3,deathGuard:true}],
+    ['r_origin_06','原初・万象調律',36,'allEnemies','special','攻撃・防御・補助・妨害を同時に行う究極技。',{power:3.30,heal:.35,allInOne:true,debuff:{fracture:3,weaken:3,slow:3}}],
+  ].forEach((x)=>addSkill('rainbow',...x));
+
+  // 白零：回復12／祝福・攻撃12／テリオス6 = 技30
+  [
+    ['w_heal_01','白光の加護',6,'ally','heal','味方1人のHPを大きく回復。',{heal:.40}],
+    ['w_heal_02','命継ぎ',7,'ally','heal','回復と再生を付与。',{heal:.28,regen:2}],
+    ['w_heal_03','清めの雫',8,'ally','heal','回復し、弱体を1つ解除。',{heal:.30,cleanse:true}],
+    ['w_heal_04','静謐の祈り',12,'allAllies','heal','仲間全員のHPを回復。',{heal:.27}],
+    ['w_heal_05','再生領域',13,'allAllies','support','仲間全員に再生を付与。',{regen:4,turns:3}],
+    ['w_heal_06','大樹の息吹',15,'allAllies','heal','全体回復し、防御を上昇。',{heal:.32,buffs:{def:1},turns:2}],
+    ['w_heal_07','還らぬ傷',14,'ally','heal','大回復。対象HPが低いほど効果上昇。',{heal:.48,balanceHeal:true}],
+    ['w_heal_08','星見の祝福',16,'allAllies','support','全体回復とMP回復。',{heal:.24,mpHeal:.14}],
+    ['w_heal_09','光輪再生',17,'allAllies','support','強い再生と障壁を付与。',{regen:5,barrier:.14,turns:3}],
+    ['w_heal_10','純白の奇跡',22,'allAllies','heal','全体の大回復と全弱体解除。',{heal:.43,cleanse:true}],
+    ['w_heal_11','蘇生の抱擁',20,'ally','heal','戦闘不能の仲間を復帰・回復。',{heal:.55,revive:true}],
+    ['w_heal_12','始まりの楽園',30,'allAllies','heal','全体を大きく癒し、毎ターン再生。',{heal:.56,regen:6,cleanse:true}],
+  ].forEach((x)=>addSkill('white',...x));
+  [
+    ['w_buff_01','祝福の刃',5,'enemy','magic','光の刃で攻撃し、自分の防御を上昇。',{power:1.30,buffs:{def:1},turns:2}],
+    ['w_buff_02','守護の号令',8,'allAllies','support','仲間全員の防御を上昇。',{buffs:{def:2},turns:3}],
+    ['w_buff_03','陽光の槍',8,'enemy','magic','敵単体へ光属性の槍。',{power:1.65}],
+    ['w_buff_04','生命賦活',10,'allAllies','support','仲間全員の攻撃・魔力を上昇。',{buffs:{atk:1,mag:1},turns:3}],
+    ['w_buff_05','聖域展開',12,'allAllies','support','仲間全員に障壁を付与。',{barrier:.22,turns:2}],
+    ['w_buff_06','浄化連撃',11,'enemy','magic','敵を攻撃し、敵の強化を1つ解除。',{power:1.58,dispel:true}],
+    ['w_buff_07','白鳥の舞',12,'allAllies','support','敏捷と回避の気配を高める。',{buffs:{agi:2},turns:3}],
+    ['w_buff_08','守護の連鎖',13,'ally','support','味方をかばい、双方の防御を上げる。',{guard:true,buffs:{def:2},turns:3}],
+    ['w_buff_09','春雷の矢',15,'allEnemies','magic','敵全体に光の矢を降らせる。',{power:1.32}],
+    ['w_buff_10','全能の祝詞',19,'allAllies','support','全能力を上げ、障壁を張る。',{buffs:{atk:1,def:1,mag:1,agi:1},barrier:.16,turns:3}],
+    ['w_buff_11','天輪の裁き',22,'enemy','magic','光輪で敵を裁く高威力魔法。',{power:2.52,debuff:{weaken:2}}],
+    ['w_buff_12','創世の福音',30,'allAllies','special','味方全員を強化し、敵全体へ光の反撃。',{heal:.18,buffs:{atk:2,def:2,mag:2,agi:2},turns:3,allEnemyPower:1.45}],
+  ].forEach((x)=>addSkill('white',...x));
+  [
+    ['w_terios_01','白虹の啓示',20,'allAllies','support','全体回復と強化。',{heal:.30,buffs:{def:2,mag:1},turns:3}],
+    ['w_terios_02','新生の剣',21,'enemy','magic','敵単体へ大ダメージ。味方全体を小回復。',{power:2.12,heal:.12}],
+    ['w_terios_03','零からの芽吹き',24,'allAllies','heal','戦闘不能を含む仲間全員を立て直す。',{heal:.35,reviveAll:true,cleanse:true}],
+    ['w_terios_04','光冠の領域',25,'allAllies','support','全体に強化・再生・障壁。',{regen:5,barrier:.28,buffs:{def:2,mag:2},turns:3}],
+    ['w_terios_05','始まりを選ぶ者',28,'allEnemies','special','敵全体を攻撃し、味方のHPを還す。',{power:2.28,heal:.22}],
+    ['w_terios_06','アルファ・テリオス',38,'allAllies','special','完全な始まり。全回復・蘇生・強化・大障壁。',{heal:1,reviveAll:true,regen:7,barrier:.55,buffs:{atk:2,def:2,mag:2,agi:2},cleanse:true,turns:4}],
+  ].forEach((x)=>addSkill('white',...x));
+
+  // 黒零：攻撃12／妨害12／テリオス6 = 技30
+  [
+    ['b_attack_01','漆黒刃',5,'enemy','physical','黒き一閃。防御低下を刻む。',{power:1.45,debuff:{fracture:2}}],
+    ['b_attack_02','黒牙連斬',7,'enemy','physical','二連撃。弱体中なら威力上昇。',{power:1.62,bonusOnDebuff:.20}],
+    ['b_attack_03','終止符',8,'enemy','magic','敵単体に終焉の印を打ち込む。',{power:1.68,debuff:{weaken:2}}],
+    ['b_attack_04','影穿ち',9,'enemy','physical','防御を無視しやすい刺突。',{power:1.82,pierce:.35}],
+    ['b_attack_05','虚無裂き',11,'enemy','magic','敵の強化を消し去る斬撃。',{power:1.74,dispel:true}],
+    ['b_attack_06','黒日',13,'allEnemies','magic','敵全体を黒い太陽で焼く。',{power:1.28,debuff:{weaken:2}}],
+    ['b_attack_07','断頭の刻',15,'enemy','physical','HPが低い敵ほど威力を増す。',{power:2.02,execute:true}],
+    ['b_attack_08','滅びの連鎖',16,'allEnemies','physical','敵全体を斬り、弱体をばら撒く。',{power:1.48,debuff:{fracture:2}}],
+    ['b_attack_09','終焉の剣雨',18,'allEnemies','magic','複数の黒刃を降らせる。',{power:1.65}],
+    ['b_attack_10','残響破',20,'enemy','magic','敵の弱体数に応じて大威力。',{power:2.44,bonusOnDebuff:.42}],
+    ['b_attack_11','星喰い',24,'enemy','special','与えたダメージの40%をHPとMPへ吸収。',{power:2.62,lifeSteal:.40,mpSteal:.20}],
+    ['b_attack_12','終わりの地平',32,'allEnemies','magic','敵全体へ壊滅的な終焉魔法。',{power:2.28,debuff:{fracture:3,weaken:3}}],
+  ].forEach((x)=>addSkill('black',...x));
+  [
+    ['b_debuff_01','侵食の刻印',6,'enemy','support','敵の防御を低下させる。',{debuff:{fracture:3}}],
+    ['b_debuff_02','停止命令',8,'enemy','support','敵の敏捷を大きく下げる。',{debuff:{slow:3}}],
+    ['b_debuff_03','疲弊の霧',10,'allEnemies','support','敵全体の攻撃を下げる。',{debuff:{weaken:3}}],
+    ['b_debuff_04','沈黙の刃',9,'enemy','physical','攻撃し、敵の特殊行動を封じる。',{power:1.15,debuff:{silence:2}}],
+    ['b_debuff_05','時間腐食',12,'allEnemies','support','敵全体に鈍化と防御低下。',{debuff:{slow:2,fracture:2}}],
+    ['b_debuff_06','絶望の楔',14,'enemy','magic','敵へ複数の弱体を打ち込む。',{power:1.22,debuff:{fracture:3,weaken:3,slow:2}}],
+    ['b_debuff_07','影縛り',13,'enemy','support','敵を縛り、次の攻撃ダメージを増加。',{debuff:{bind:2,fracture:2}}],
+    ['b_debuff_08','破棄宣言',15,'allEnemies','support','敵全体の強化を解除。',{dispel:true,debuff:{weaken:2}}],
+    ['b_debuff_09','終幕結界',17,'allEnemies','support','敵全体の攻防を下げ、味方への被害を抑える。',{debuff:{fracture:2,weaken:3,slow:2}}],
+    ['b_debuff_10','凋落の環',20,'allEnemies','magic','敵全体に小ダメージと全弱体。',{power:1.05,debuff:{fracture:3,weaken:3,slow:3}}],
+    ['b_debuff_11','黒い契約',22,'enemy','special','敵の強化を奪い、黒零を強化する。',{power:1.38,dispel:true,stealBuff:true,buffs:{atk:2,mag:2},turns:3}],
+    ['b_debuff_12','終焉の檻',30,'allEnemies','special','敵全体へ強弱体。次の攻撃を増幅。',{power:1.50,debuff:{fracture:4,weaken:4,slow:4,bind:2}}],
+  ].forEach((x)=>addSkill('black',...x));
+  [
+    ['b_terios_01','黒虹の審判',20,'enemy','special','敵単体へ大ダメージと複数弱体。',{power:2.32,debuff:{fracture:3,weaken:3}}],
+    ['b_terios_02','終始の残照',21,'allEnemies','magic','敵全体を攻撃し、味方のMPを回復。',{power:1.88,mpHeal:.12}],
+    ['b_terios_03','還元の鎌',24,'enemy','special','敵を倒し切るほどの威力。HP・MPを吸収。',{power:2.78,execute:true,lifeSteal:.36,mpSteal:.18}],
+    ['b_terios_04','継がれる終焉',25,'allEnemies','support','敵全体の強化を消し、味方全体へ障壁。',{dispel:true,barrier:.24,debuff:{weaken:3},turns:3}],
+    ['b_terios_05','終わりを見届ける者',29,'allEnemies','special','大ダメージ、敵全体の行動を鈍化。',{power:2.35,debuff:{slow:4,fracture:3}}],
+    ['b_terios_06','オメガ・テリオス',38,'allEnemies','special','完全な終わり。全体超大ダメージ・全弱体・味方へ障壁。',{power:3.75,barrier:.35,debuff:{fracture:5,weaken:5,slow:5,bind:2}}],
+  ].forEach((x)=>addSkill('black',...x));
+
+  // パッシブ 10ずつ。実効果は game.js の passives を参照。
+  const PASSIVE_DATA = {
+    rainbow: [
+      ['r_pass_start_01','芽吹きの余韻','回復技の回復量+8%。','heal_boost'],['r_pass_start_02','希望の連鎖','HP50%以下の味方への回復量+15%。','low_ally_heal'],['r_pass_start_03','白の残照','戦闘開始時、全員に小さな再生を付与。','opening_regen'],
+      ['r_pass_end_01','滅びの感覚','弱体中の敵へのダメージ+8%。','debuff_damage'],['r_pass_end_02','終止の観測','敵を倒すと次の技のMP消費-30%。','kill_discount'],['r_pass_end_03','黒の残照','最初に弱体を付与した敵へ与ダメージ+10%。','first_debuff'],
+      ['r_pass_tune_01','均衡感覚','HP50%以下の時、受けるダメージ-10%。','low_hp_guard'],['r_pass_tune_02','連環の呼吸','技使用時、MPを最大値の2%回復。','skill_cycle'],['r_pass_tune_03','調律者の目','バフ・デバフの持続+1ターン。','duration_plus'],
+      ['r_pass_origin_01','原初の観測者','テリオス盤でのみ解放。全ての技の習熟度獲得量+1。','mastery_plus'],
+    ],
+    white: [
+      ['w_pass_heal_01','慈雨','回復技の回復量+10%。','heal_boost'],['w_pass_heal_02','命の循環','回復時、対象のMPを最大値の3%回復。','heal_mp'],['w_pass_heal_03','白の安堵','戦闘終了時の全体回復量+4%。','post_battle_all'],['w_pass_heal_04','祈りの余白','弱体解除時、対象へ障壁を付与。','cleanse_barrier'],
+      ['w_pass_buff_01','祝福の連鎖','付与した強化の持続+1ターン。','duration_plus'],['w_pass_buff_02','守護の本能','かばう時の被ダメージ-12%。','guard_reduction'],['w_pass_buff_03','光の反撃','障壁が残っている間、魔力+10%。','barrier_magic'],['w_pass_buff_04','再起の白翼','戦闘不能から復帰した仲間のHP回復量+20%。','revive_boost'],
+      ['w_pass_terios_01','始まりの選択','テリオス盤。戦闘開始時、全員へ障壁。','opening_barrier'],['w_pass_terios_02','完全な慈愛','回復技を使うたび、白零のMPを最大値の4%回復。','skill_cycle'],
+    ],
+    black: [
+      ['b_pass_attack_01','終焉の残響','弱体中の敵へ与ダメージ+12%。','debuff_damage'],['b_pass_attack_02','残滓の収奪','敵撃破時、HPを最大値の5%回復。','kill_hp'],['b_pass_attack_03','黒刃の冴え','クリティカル率を高める。','crit_up'],['b_pass_attack_04','断罪の手','HP30%以下の敵へ与ダメージ+15%。','execute_damage'],
+      ['b_pass_debuff_01','断絶の刻','攻撃技は20%で防御低下を付与。','fracture_chance'],['b_pass_debuff_02','沈黙の余韻','弱体を3つ以上持つ敵の攻撃力をさらに低下。','multi_debuff'],['b_pass_debuff_03','侵食拡散','全体弱体技の持続+1ターン。','duration_plus'],['b_pass_debuff_04','終幕の予感','敵を弱体化したターン、受けるダメージ-8%。','debuff_guard'],
+      ['b_pass_terios_01','終わりを選ぶ者','テリオス盤。敵撃破時、最大MPの8%を回復。','kill_mp'],['b_pass_terios_02','残すべきもの','HP50%以下の味方がいると与ダメージ+15%。','ally_low_damage'],
+    ],
+  };
+  Object.entries(PASSIVE_DATA).forEach(([owner, list]) => list.forEach(([id,name,description,effect]) => addPassive(owner,id,name,description,{effect})));
+
+  const STAT_TEMPLATES = {
+    rainbow: [
+      ['始まりの体温',{maxHp:9}],['命脈の拡張',{maxMp:4}],['再生の感覚',{mag:2}],['祝福の剣腕',{atk:2}],['希望の歩み',{agi:2}],['白光の守り',{def:2}],['芽吹く幸運',{luck:2}],['創生の体躯',{maxHp:14}],['白虹の魔力',{mag:3}],['生命の剛力',{atk:3}],['始まりの器',{maxMp:6}],['新星の足取り',{agi:3}],
+      ['終わりの体温',{atk:3}],['静止の知覚',{mag:2}],['断絶の体躯',{maxHp:10}],['黒刃の防御',{def:2}],['破滅の歩み',{agi:2}],['終焉の器',{maxMp:5}],['灰の幸運',{luck:2}],['虚無の剣腕',{atk:4}],['黒虹の魔力',{mag:3}],['停止の防壁',{def:3}],['断末の心肺',{maxHp:15}],['最後の踏み込み',{agi:3}],
+      ['調律の体温',{def:2}],['均衡の器',{maxMp:4}],['虹環の剣腕',{atk:2}],['三相の知性',{mag:2}],['連環の歩法',{agi:2}],['保全の体躯',{maxHp:10}],['天秤の幸運',{luck:2}],['位相の防壁',{def:3}],['調律の魔力',{mag:3}],['結界の剣腕',{atk:3}],['三彩の心肺',{maxHp:14}],['均衡の歩み',{agi:3}],
+      ['原初の器',{maxMp:8,maxHp:16}],['万象の剣腕',{atk:4}],['世界律の防壁',{def:4}],['原初の魔力',{mag:4}],
+    ],
+    white: [
+      ['温かな体温',{maxHp:8}],['白い呼吸',{maxMp:5}],['祈りの魔力',{mag:3}],['守護の腕',{def:2}],['軽やかな歩み',{agi:1}],['生命の幸運',{luck:2}],['光の器',{maxMp:6}],['白壁の体躯',{maxHp:12}],['回復の理',{mag:3}],['抱擁の防壁',{def:3}],['再生の歩み',{agi:2}],['癒しの剣腕',{atk:2}],['始まりの心肺',{maxHp:14}],['浄化の器',{maxMp:6}],['大樹の魔力',{mag:4}],['白翼の防御',{def:3}],['慈愛の幸運',{luck:2}],['楽園の歩法',{agi:2}],
+      ['祝福の体温',{maxHp:8}],['聖域の器',{maxMp:5}],['光槍の魔力',{mag:3}],['守護の剣腕',{atk:2}],['白鳥の歩み',{agi:2}],['加護の防御',{def:3}],['祝詞の幸運',{luck:2}],['光冠の体躯',{maxHp:12}],['活性の器',{maxMp:6}],['陽光の剣腕',{atk:3}],['聖光の魔力',{mag:4}],['連鎖の防壁',{def:3}],['福音の心肺',{maxHp:14}],['創世の器',{maxMp:7}],['天輪の魔力',{mag:4}],['白耀の剣腕',{atk:3}],['祝福の歩法',{agi:2}],['守護の幸運',{luck:2}],
+      ['テリオスの器',{maxHp:16,maxMp:8}],['完全な白光',{mag:5}],['始まりの防壁',{def:4}],['新生の剣腕',{atk:4}],
+    ],
+    black: [
+      ['黒き体温',{maxHp:9}],['終焉の器',{maxMp:4}],['漆黒の剣腕',{atk:3}],['破滅の魔力',{mag:2}],['影の歩み',{agi:2}],['断絶の防壁',{def:2}],['灰の幸運',{luck:2}],['黒牙の体躯',{maxHp:12}],['虚無の剣腕',{atk:4}],['終止の魔力',{mag:3}],['夜の器',{maxMp:6}],['斬首の歩法',{agi:3}],['星喰いの心肺',{maxHp:15}],['終焉の防御',{def:3}],['残響の剣腕',{atk:4}],['滅びの魔力',{mag:4}],['黒日の器',{maxMp:7}],['冥い幸運',{luck:2}],
+      ['侵食の体温',{maxHp:8}],['妨害の器',{maxMp:5}],['刻印の魔力',{mag:3}],['断罪の剣腕',{atk:2}],['停止の歩み',{agi:2}],['黒檻の防壁',{def:3}],['腐食の幸運',{luck:2}],['沈黙の体躯',{maxHp:11}],['影縛りの器',{maxMp:6}],['絶望の魔力',{mag:4}],['凋落の剣腕',{atk:3}],['終幕の防御',{def:3}],['時間腐食の歩み',{agi:2}],['破棄の心肺',{maxHp:14}],['契約の器',{maxMp:7}],['檻の魔力',{mag:4}],['断絶の剣腕',{atk:3}],['黒い幸運',{luck:2}],
+      ['テリオスの器',{maxHp:16,maxMp:8}],['完全な終焉',{atk:5}],['還元の防壁',{def:4}],['残照の魔力',{mag:5}],
+    ],
   };
 
+  function positioning(owner, branch, index) {
+    const t = index;
+    const zig = (t % 3) - 1;
+    if (owner === 'rainbow') {
+      if (branch === 'start') return { x: 600 + zig * 62, y: 500 - Math.floor(t / 3) * 64 };
+      if (branch === 'end') return { x: 685 + Math.floor(t / 3) * 70, y: 500 + zig * 62 };
+      if (branch === 'tune') return { x: 600 + zig * 62, y: 610 + Math.floor(t / 3) * 64 };
+      return { x: 505 - Math.floor(t / 3) * 70, y: 500 + zig * 62 };
+    }
+    if (owner === 'white') {
+      if (branch === 'heal') return { x: 560 - Math.floor(t / 4) * 58, y: 300 + ((t % 4) - 1.5) * 72 };
+      if (branch === 'buff') return { x: 700 + Math.floor(t / 4) * 58, y: 300 + ((t % 4) - 1.5) * 72 };
+      return { x: 630 + ((t % 3) - 1) * 76, y: 560 + Math.floor(t / 3) * 72 };
+    }
+    if (branch === 'attack') return { x: 560 - Math.floor(t / 4) * 58, y: 300 + ((t % 4) - 1.5) * 72 };
+    if (branch === 'debuff') return { x: 700 + Math.floor(t / 4) * 58, y: 300 + ((t % 4) - 1.5) * 72 };
+    return { x: 630 + ((t % 3) - 1) * 76, y: 560 + Math.floor(t / 3) * 72 };
+  }
+
+  function makeBranch(owner, branch, label, skillIds, passiveIds, statEntries, requirements = {}) {
+    const panels = [];
+    const all = [];
+    // 1 skill + stat + stat + passive cadence. Skill count leads the branch, then remaining stats/passives fill branch.
+    skillIds.forEach((skill, index) => all.push({category:'skill',name:SKILLS[skill].name,description:SKILLS[skill].description,skill}));
+    passiveIds.forEach((passive) => all.push({category:'passive',name:PASSIVES[passive].name,description:PASSIVES[passive].description,passive}));
+    statEntries.forEach(([name,effect]) => all.push({category:'stat',name,description:Object.entries(effect).map(([k,v])=>`${({maxHp:'HP',maxMp:'MP',atk:'攻撃',def:'防御',mag:'魔力',agi:'敏捷',luck:'幸運'})[k]}+${v}`).join('／'),effect}));
+    // distribute by type so skills form a visible spine; each node requires prior node of branch.
+    const ordered = [];
+    const max = Math.max(skillIds.length, passiveIds.length, statEntries.length);
+    for (let i=0;i<max;i++) {
+      if (skillIds[i]) ordered.push(all.find((n)=>n.skill===skillIds[i]));
+      if (statEntries[i*2]) ordered.push(all.find((n)=>n.name===statEntries[i*2][0]));
+      if (statEntries[i*2+1]) ordered.push(all.find((n)=>n.name===statEntries[i*2+1][0]));
+      if (passiveIds[i]) ordered.push(all.find((n)=>n.passive===passiveIds[i]));
+    }
+    return ordered.map((node,index)=>({
+      id:`${owner}_${branch}_${String(index+1).padStart(2,'0')}`, owner, branch, label,
+      category:node.category, name:node.name, description:node.description, skill:node.skill, passive:node.passive, effect:node.effect,
+      cost: node.category === 'stat' ? 1 + Math.floor(index/10) : node.category === 'passive' ? 2 + Math.floor(index/9) : 2 + Math.floor(index/8),
+      minLevel: requirements.minLevel ? requirements.minLevel + Math.floor(index/7)*2 : 1 + Math.floor(index/7)*2,
+      storyFlag: requirements.storyFlag || null,
+      prerequisite: index === 0 ? `${owner}_core` : `${owner}_${branch}_${String(index).padStart(2,'0')}`,
+      position: positioning(owner,branch,index),
+      final: index === ordered.length-1,
+    }));
+  }
+
+  function buildCharacter(owner) {
+    const base = BASE_CHARACTERS[owner];
+    const panels = [{ id:`${owner}_core`, owner, branch:'core', label:'核', category:'core', name:owner==='rainbow'?'調律核':owner==='white'?'始まりの灯':'終わりの灯', description:'この存在の根にある力。', cost:0, effect: owner==='rainbow'?{maxMp:4}:owner==='white'?{maxMp:5}:{atk:1,maxMp:4}, prerequisite:null, position:{x:600,y:500} }];
+    if (owner === 'rainbow') {
+      const skillGroups = { start:Object.keys(SKILLS).filter((id)=>id.startsWith('r_start_')), end:Object.keys(SKILLS).filter((id)=>id.startsWith('r_end_')), tune:Object.keys(SKILLS).filter((id)=>id.startsWith('r_tune_')), origin:Object.keys(SKILLS).filter((id)=>id.startsWith('r_origin_')) };
+      const pass = { start:['r_pass_start_01','r_pass_start_02','r_pass_start_03'],end:['r_pass_end_01','r_pass_end_02','r_pass_end_03'],tune:['r_pass_tune_01','r_pass_tune_02','r_pass_tune_03'],origin:['r_pass_origin_01'] };
+      const stats = STAT_TEMPLATES.rainbow;
+      panels.push(...makeBranch(owner,'start','始まりの力',skillGroups.start,pass.start,stats.slice(0,12)));
+      panels.push(...makeBranch(owner,'end','終わりの力',skillGroups.end,pass.end,stats.slice(12,24)));
+      panels.push(...makeBranch(owner,'tune','調律の力',skillGroups.tune,pass.tune,stats.slice(24,36)));
+      const origin = makeBranch(owner,'origin','原初の力',skillGroups.origin,pass.origin,stats.slice(36),{storyFlag:'terios_rainbow',minLevel:30});
+      origin.forEach((p,index)=>{ p.requiresAll = index === 0 ? [panels.find((q)=>q.branch==='start'&&q.final).id,panels.find((q)=>q.branch==='end'&&q.final).id,panels.find((q)=>q.branch==='tune'&&q.final).id] : null; p.prerequisite = index === 0 ? `${owner}_core` : p.prerequisite; });
+      panels.push(...origin);
+    } else {
+      const prefix = owner === 'white' ? 'w' : 'b';
+      const a = owner === 'white' ? 'heal' : 'attack';
+      const b = owner === 'white' ? 'buff' : 'debuff';
+      const skillsA = Object.keys(SKILLS).filter((id)=>id.startsWith(`${prefix}_${a}_`));
+      const skillsB = Object.keys(SKILLS).filter((id)=>id.startsWith(`${prefix}_${b}_`));
+      const skillsT = Object.keys(SKILLS).filter((id)=>id.startsWith(`${prefix}_terios_`));
+      const passIds = Object.keys(PASSIVES).filter((id)=>id.startsWith(`${prefix}_pass_`));
+      const stats = STAT_TEMPLATES[owner];
+      panels.push(...makeBranch(owner,a,owner==='white'?'回復の道':'破壊の道',skillsA,passIds.slice(0,4),stats.slice(0,18)));
+      panels.push(...makeBranch(owner,b,owner==='white'?'祝福と光刃の道':'妨害と断絶の道',skillsB,passIds.slice(4,8),stats.slice(18,36)));
+      const terios = makeBranch(owner,'terios','テリオス',skillsT,passIds.slice(8),stats.slice(36),{storyFlag:`terios_${owner}`,minLevel:30});
+      const finalA=panels.find((q)=>q.branch===a&&q.final); const finalB=panels.find((q)=>q.branch===b&&q.final);
+      terios.forEach((p,index)=>{ p.requiresAll=index===0?[finalA.id,finalB.id]:null; p.prerequisite=index===0?`${owner}_core`:p.prerequisite; });
+      panels.push(...terios);
+    }
+    return { ...base, starterSkills: owner==='rainbow'?['r_tune_01']:owner==='white'?['w_heal_01']:['b_attack_01'], panels };
+  }
+
+  const CHARACTER_DEFS = { rainbow:buildCharacter('rainbow'), white:buildCharacter('white'), black:buildCharacter('black') };
+
   const ENEMIES = {
-    pale_slime: { id: 'pale_slime', name: '淡光スライム', level: 1, maxHp: 58, atk: 10, def: 4, mag: 6, agi: 7, exp: 18, gold: 12, sprite: 'slime', drops: [{ id: 'slime_core', chance: 0.9, qty: [1, 2] }], skills: [{ name: '体当たり', power: 1.0 }] },
-    grass_hare: { id: 'grass_hare', name: '草駆けラビット', level: 1, maxHp: 48, atk: 12, def: 3, mag: 3, agi: 12, exp: 16, gold: 10, sprite: 'hare', drops: [{ id: 'herb', chance: 0.65, qty: [1, 2] }], skills: [{ name: '跳び蹴り', power: 1.05 }] },
-    wind_wolf: { id: 'wind_wolf', name: '風斬りウルフ', level: 2, maxHp: 86, atk: 15, def: 7, mag: 7, agi: 14, exp: 31, gold: 22, sprite: 'wolf', drops: [{ id: 'wolf_fang', chance: 0.85, qty: [1, 2] }, { id: 'herb', chance: 0.45, qty: [1, 2] }], skills: [{ name: '風牙', power: 1.15 }, { name: '低い唸り', power: 0.8, effect: 'fracture' }] },
-    whisper_treant: { id: 'whisper_treant', name: '囁きの若木', level: 3, maxHp: 132, atk: 18, def: 11, mag: 12, agi: 5, exp: 48, gold: 34, sprite: 'treant', drops: [{ id: 'bark', chance: 0.92, qty: [1, 2] }, { id: 'herb', chance: 0.7, qty: [1, 3] }], skills: [{ name: '枝打ち', power: 1.15 }, { name: '眠り胞子', power: 0.6, effect: 'fracture' }] },
-    ruin_sentinel: { id: 'ruin_sentinel', name: '遺構の番兵', level: 4, maxHp: 180, atk: 21, def: 14, mag: 15, agi: 8, exp: 75, gold: 52, sprite: 'sentinel', drops: [{ id: 'old_fragment', chance: 0.95, qty: [1, 2] }, { id: 'prism_dust', chance: 0.35, qty: [1, 1] }], skills: [{ name: '石槍', power: 1.2 }, { name: '崩落波', power: 0.9, effect: 'fracture' }] },
-    moss_wolf: { id: 'moss_wolf', name: '苔牙の獣王', level: 5, maxHp: 320, atk: 25, def: 12, mag: 12, agi: 15, exp: 150, gold: 120, sprite: 'bosswolf', boss: true, drops: [{ id: 'wolf_fang', chance: 1, qty: [3, 4] }, { id: 'prism_dust', chance: 1, qty: [1, 2] }], skills: [{ name: '王牙', power: 1.38 }, { name: '森の咆哮', power: 0.95, effect: 'fracture' }] },
+    pale_slime: { id: 'pale_slime', name: '淡光スライム', level: 1, maxHp: 58, atk: 10, def: 4, mag: 6, agi: 7, exp: 18, gold: 12, sprite: 'slime', drops: [{ id: 'slime_core', chance: .9, qty: [1,2] }], skills:[{name:'体当たり',power:1.0}] },
+    grass_hare: { id: 'grass_hare', name: '草駆けラビット', level: 1, maxHp: 48, atk: 12, def: 3, mag: 3, agi: 12, exp: 16, gold: 10, sprite: 'hare', drops:[{id:'herb',chance:.65,qty:[1,2]}], skills:[{name:'跳び蹴り',power:1.05}] },
+    wind_wolf: { id: 'wind_wolf', name: '風斬りウルフ', level: 2, maxHp: 86, atk: 15, def: 7, mag: 7, agi: 14, exp: 31, gold: 22, sprite: 'wolf', drops:[{id:'wolf_fang',chance:.85,qty:[1,2]},{id:'herb',chance:.45,qty:[1,2]}], skills:[{name:'風牙',power:1.15},{name:'低い唸り',power:.8,effect:'fracture'}] },
+    whisper_treant: { id: 'whisper_treant', name: '囁きの若木', level: 3, maxHp: 132, atk: 18, def: 11, mag: 12, agi: 5, exp: 48, gold: 34, sprite: 'treant', drops:[{id:'bark',chance:.92,qty:[1,2]},{id:'herb',chance:.7,qty:[1,3]}], skills:[{name:'枝打ち',power:1.15},{name:'眠り胞子',power:.6,effect:'fracture'}] },
+    ruin_sentinel: { id: 'ruin_sentinel', name: '遺構の番兵', level:4,maxHp:180,atk:21,def:14,mag:15,agi:8,exp:75,gold:52,sprite:'sentinel',drops:[{id:'old_fragment',chance:.95,qty:[1,2]},{id:'prism_dust',chance:.35,qty:[1,1]}],skills:[{name:'石槍',power:1.2},{name:'崩落波',power:.9,effect:'fracture'}] },
+    moss_wolf: { id: 'moss_wolf', name:'苔牙の獣王', level:5,maxHp:320,atk:25,def:12,mag:12,agi:15,exp:150,gold:120,sprite:'bosswolf',boss:true,drops:[{id:'wolf_fang',chance:1,qty:[3,4]},{id:'prism_dust',chance:1,qty:[1,2]}],skills:[{name:'王牙',power:1.38},{name:'森の咆哮',power:.95,effect:'fracture'}] },
   };
 
   const LOCATIONS = {
-    lindholm: { id: 'lindholm', name: '宿場町リンドホルム', type: 'town', x: 24, y: 70, rank: 'F', description: '草原と森の境にある、小さな宿場町。冒険者ギルド《枝角亭》がある。', facilities: ['guild', 'shop', 'craft', 'inn', 'sell'] },
-    windy_plain: { id: 'windy_plain', name: '風渡る草原', type: 'field', x: 43, y: 62, rank: 'F', description: '低い草と風の道が続く、リンドホルム近郊の草原。', enemyPool: ['pale_slime', 'grass_hare', 'wind_wolf'], materialPool: ['herb', 'herb', 'slime_core'], explorationCost: 0 },
-    whisper_woods: { id: 'whisper_woods', name: '囁きの森', type: 'field', x: 62, y: 39, rank: 'F', description: '木々が不思議な音を立てる深い森。足を踏み外すと戻れない。', enemyPool: ['wind_wolf', 'whisper_treant'], materialPool: ['herb', 'bark', 'bark'], explorationCost: 0 },
-    fallen_ruins: { id: 'fallen_ruins', name: '落星の遺構', type: 'field', x: 79, y: 28, rank: 'E', description: '星のように落ちた建造物が眠る遺構。危険な魔力反応がある。', enemyPool: ['whisper_treant', 'ruin_sentinel'], materialPool: ['old_fragment', 'old_fragment', 'prism_dust'], explorationCost: 0 },
-    frost_gate: { id: 'frost_gate', name: '白霜の関所', type: 'placeholder', x: 75, y: 77, rank: 'D', description: '冷たい山域の入口。第一章の外にある。' },
+    lindholm:{id:'lindholm',name:'宿場町リンドホルム',type:'town',x:24,y:70,rank:'F',description:'草原と森の境にある、小さな宿場町。冒険者ギルド《枝角亭》がある。',facilities:['guild','shop','craft','inn','sell']},
+    windy_plain:{id:'windy_plain',name:'風渡る草原',type:'field',x:43,y:62,rank:'F',description:'低い草と風の道が続く、リンドホルム近郊の草原。',enemyPool:['pale_slime','grass_hare','wind_wolf'],materialPool:['herb','herb','slime_core'],explorationCost:0},
+    whisper_woods:{id:'whisper_woods',name:'囁きの森',type:'field',x:62,y:39,rank:'F',description:'木々が不思議な音を立てる深い森。足を踏み外すと戻れない。',enemyPool:['wind_wolf','whisper_treant'],materialPool:['herb','bark','bark'],explorationCost:0},
+    fallen_ruins:{id:'fallen_ruins',name:'落星の遺構',type:'field',x:79,y:28,rank:'E',description:'星のように落ちた建造物が眠る遺構。危険な魔力反応がある。',enemyPool:['whisper_treant','ruin_sentinel'],materialPool:['old_fragment','old_fragment','prism_dust'],explorationCost:0},
+    frost_gate:{id:'frost_gate',name:'白霜の関所',type:'placeholder',x:75,y:77,rank:'D',description:'冷たい山域の入口。第一章の外にある。'},
   };
-
   const QUESTS = {
-    q_herb: { id: 'q_herb', name: '薬草を届けて', rank: 'F', description: '宿場町の治療師へ、草原の薬草を3つ届ける。', type: 'collect', target: 'herb', amount: 3, reward: { gold: 80, advExp: 30, items: [{ id: 'potion', qty: 1 }] }, unlockAt: 0, dialogue: '「薬草が足りないんだ。風渡る草原で採れるはずだよ。」' },
-    q_wolf: { id: 'q_wolf', name: '風を裂く牙', rank: 'F', description: '街道を荒らす風斬りウルフを3体討伐する。', type: 'kill', target: 'wind_wolf', amount: 3, reward: { gold: 130, advExp: 60, items: [{ id: 'ether', qty: 1 }] }, unlockAt: 0, dialogue: '「街道の荷馬車が襲われている。無理はするなよ。」' },
-    q_ruin: { id: 'q_ruin', name: '落星の欠片', rank: 'E', description: '落星の遺構で古びた石片を2つ回収する。', type: 'collect', target: 'old_fragment', amount: 2, reward: { gold: 260, advExp: 70, items: [{ id: 'potion', qty: 2 }, { id: 'ether', qty: 1 }] }, unlockAt: 90, dialogue: '「遺構の調査団が素材を求めている。E級以上の依頼だ。」' },
-    q_boss: { id: 'q_boss', name: '森の獣王', rank: 'E', description: '囁きの森に現れた苔牙の獣王を討伐する。', type: 'kill', target: 'moss_wolf', amount: 1, reward: { gold: 420, advExp: 95, items: [{ id: 'prism_dust', qty: 2 }] }, unlockAt: 90, dialogue: '「森の奥で、何かが縄張りを広げている。帰還を最優先にしてくれ。」' },
+    q_herb:{id:'q_herb',name:'薬草を届けて',rank:'F',description:'宿場町の治療師へ、草原の薬草を3つ届ける。',type:'collect',target:'herb',amount:3,reward:{gold:80,advExp:30,items:[{id:'potion',qty:1}]},unlockAt:0,dialogue:'「薬草が足りないんだ。風渡る草原で採れるはずだよ。」'},
+    q_wolf:{id:'q_wolf',name:'風を裂く牙',rank:'F',description:'街道を荒らす風斬りウルフを3体討伐する。',type:'kill',target:'wind_wolf',amount:3,reward:{gold:130,advExp:60,items:[{id:'ether',qty:1}]},unlockAt:0,dialogue:'「街道の荷馬車が襲われている。無理はするなよ。」'},
+    q_ruin:{id:'q_ruin',name:'落星の欠片',rank:'E',description:'落星の遺構で古びた石片を2つ回収する。',type:'collect',target:'old_fragment',amount:2,reward:{gold:260,advExp:70,items:[{id:'potion',qty:2},{id:'ether',qty:1}]},unlockAt:90,dialogue:'「遺構の調査団が素材を求めている。E級以上の依頼だ。」'},
+    q_boss:{id:'q_boss',name:'森の獣王',rank:'E',description:'囁きの森に現れた苔牙の獣王を討伐する。',type:'kill',target:'moss_wolf',amount:1,reward:{gold:420,advExp:95,items:[{id:'prism_dust',qty:2}]},unlockAt:90,dialogue:'「森の奥で、何かが縄張りを広げている。帰還を最優先にしてくれ。」'},
   };
-
   const RECIPES = {
-    potion_bundle: { id: 'potion_bundle', name: '癒しの小瓶 ×2', description: '薬草を煎じ、携行用の回復薬にする。', ingredients: [{ id: 'herb', qty: 3 }, { id: 'slime_core', qty: 1 }], output: { type: 'item', id: 'potion', qty: 2 } },
-    rainbow_edge: { id: 'rainbow_edge', name: '調律の刃片', description: '虹全の攻撃力を+3。作成時に自動装備する。', ingredients: [{ id: 'wolf_fang', qty: 2 }, { id: 'prism_dust', qty: 1 }], output: { type: 'equipment', id: 'rainbow_edge', qty: 1 } },
-    white_charm: { id: 'white_charm', name: '守りの護符', description: '白零の防御力+3、最大HP+8。作成時に自動装備する。', ingredients: [{ id: 'bark', qty: 2 }, { id: 'herb', qty: 2 }], output: { type: 'equipment', id: 'white_charm', qty: 1 } },
-    black_ring: { id: 'black_ring', name: '侵食の指輪', description: '黒零の魔力+3、敏捷+1。作成時に自動装備する。', ingredients: [{ id: 'old_fragment', qty: 2 }, { id: 'slime_core', qty: 2 }], output: { type: 'equipment', id: 'black_ring', qty: 1 } },
+    potion_bundle:{id:'potion_bundle',name:'癒しの小瓶 ×2',description:'薬草を煎じ、携行用の回復薬にする。',ingredients:[{id:'herb',qty:3},{id:'slime_core',qty:1}],output:{type:'item',id:'potion',qty:2}},
+    rainbow_edge:{id:'rainbow_edge',name:'調律の刃片',description:'虹全の攻撃力を+3。作成時に自動装備する。',ingredients:[{id:'wolf_fang',qty:2},{id:'prism_dust',qty:1}],output:{type:'equipment',id:'rainbow_edge',qty:1}},
+    white_charm:{id:'white_charm',name:'守りの護符',description:'白零の防御力+3、最大HP+8。作成時に自動装備する。',ingredients:[{id:'bark',qty:2},{id:'herb',qty:2}],output:{type:'equipment',id:'white_charm',qty:1}},
+    black_ring:{id:'black_ring',name:'侵食の指輪',description:'黒零の魔力+3、敏捷+1。作成時に自動装備する。',ingredients:[{id:'old_fragment',qty:2},{id:'slime_core',qty:2}],output:{type:'equipment',id:'black_ring',qty:1}},
   };
 
-  return { RANKS, ITEM_DEFS, EQUIPMENT_DEFS, CHARACTER_DEFS, SKILLS, ENEMIES, LOCATIONS, QUESTS, RECIPES };
+  return { RANKS, ITEM_DEFS, EQUIPMENT_DEFS, CHARACTER_DEFS, SKILLS, PASSIVES, ENEMIES, LOCATIONS, QUESTS, RECIPES };
 })();

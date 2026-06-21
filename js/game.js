@@ -1,9 +1,10 @@
-/* 全零〈オムニル〉— 星なき始まり — prototype v0.1 */
+/* 全零〈オムニル〉— 星なき始まり — prototype v0.3 */
 (() => {
   'use strict';
 
   const D = window.OMNIL_DATA;
-  const SAVE_KEY = 'omnil_rpg_prototype_v01';
+  const SAVE_KEY = 'omnil_rpg_prototype_v03';
+  const audio = window.OMNIL_AUDIO || { resume() {}, configure() {}, setTheme() {}, sfx() {}, stopAll() {} };
   const root = document.getElementById('gameRoot');
   const nav = document.getElementById('bottomNav');
   const modalLayer = document.getElementById('modalLayer');
@@ -25,12 +26,13 @@
         exp: 0,
         panelPoints: 0,
         unlockedPanels: def.panels.filter((p) => p.cost === 0).map((p) => p.id),
+        skillMastery: {},
         hp: def.base.maxHp,
         mp: def.base.maxMp,
       };
     });
     return {
-      version: 1,
+      version: 3,
       started: false,
       scene: 'title',
       currentLocation: 'lindholm',
@@ -39,11 +41,11 @@
       adventureExp: 0,
       inventory: { potion: 2, ether: 1, herb: 1 },
       equipment: { rainbow: null, white: null, black: null },
-      crafted: [],
-      activeQuests: [],
-      completedQuests: [],
-      kills: {},
+      crafted: [], activeQuests: [], completedQuests: [], kills: {},
       flags: {},
+      audio: { music: true, sfx: true, volume: .52 },
+      automation: { battleAutoDefault: false },
+      autoExplore: null,
       characters,
       battle: null,
       logs: ['全零〈オムニル〉は、宿場町リンドホルムから始まった。'],
@@ -55,19 +57,28 @@
     const merged = { ...base, ...candidate };
     merged.inventory = { ...base.inventory, ...(candidate.inventory || {}) };
     merged.equipment = { ...base.equipment, ...(candidate.equipment || {}) };
+    merged.audio = { ...base.audio, ...(candidate.audio || {}) };
+    merged.automation = { ...base.automation, ...(candidate.automation || {}) };
+    merged.flags = { ...base.flags, ...(candidate.flags || {}) };
     merged.characters = { ...base.characters, ...(candidate.characters || {}) };
     Object.keys(base.characters).forEach((id) => {
-      merged.characters[id] = { ...base.characters[id], ...(candidate.characters?.[id] || {}) };
+      const old = candidate.characters?.[id] || {};
+      merged.characters[id] = { ...base.characters[id], ...old, skillMastery: { ...(old.skillMastery || {}) } };
+      const validPanels = new Set(D.CHARACTER_DEFS[id].panels.map((panel) => panel.id));
+      const oldPanels = (old.unlockedPanels || []).filter((panelId) => validPanels.has(panelId));
+      merged.characters[id].unlockedPanels = [...new Set([...base.characters[id].unlockedPanels, ...oldPanels])];
       capResources(id, merged);
     });
+    merged.version = 3;
     merged.scene = 'title';
     merged.battle = null;
+    merged.autoExplore = null;
     return merged;
   }
 
   function loadState() {
     try {
-      const raw = localStorage.getItem(SAVE_KEY);
+      const raw = localStorage.getItem(SAVE_KEY) || localStorage.getItem('omnil_rpg_prototype_v01');
       return raw ? normalizeState(JSON.parse(raw)) : freshState();
     } catch (error) {
       console.warn('セーブ読み込み失敗', error);
@@ -76,6 +87,45 @@
   }
 
   let state = loadState();
+
+  function desiredAudioTheme() {
+    if (state.scene === 'title') return 'title';
+    if (state.scene === 'battle') return 'battle';
+    const locationId = state.currentLocation;
+    if (locationId === 'lindholm') return 'town';
+    if (locationId === 'windy_plain') return 'plain';
+    if (locationId === 'whisper_woods') return 'forest';
+    if (locationId === 'fallen_ruins') return 'ruins';
+    return 'world';
+  }
+
+  function syncAudioTheme() {
+    audio.configure(state.audio);
+    audio.setTheme(desiredAudioTheme());
+    updateAudioButton();
+  }
+
+  function updateAudioButton() {
+    const button = document.getElementById('audioButton');
+    if (!button) return;
+    const enabled = !!state.audio?.music;
+    button.classList.toggle('is-on', enabled);
+    button.classList.toggle('is-off', !enabled);
+    button.textContent = enabled ? '♫' : '♩';
+    button.title = enabled ? '音楽をオフにする' : '音楽をオンにする';
+    button.setAttribute('aria-label', button.title);
+  }
+
+  function toggleAudio() {
+    state.audio.music = !state.audio.music;
+    if (state.audio.music) audio.resume();
+    audio.configure(state.audio);
+    audio.setTheme(desiredAudioTheme());
+    updateAudioButton();
+    saveGame();
+    toast(state.audio.music ? '音楽をオンにしました。' : '音楽をオフにしました。');
+  }
+
 
   function saveGame(show = false) {
     try {
@@ -114,8 +164,12 @@
   function getChar(id) { return state.characters[id]; }
 
   function panelEffects(id) {
-    const ch = getChar(id);
-    const def = getDef(id);
+    return panelEffectsForState(id, state);
+  }
+
+  function panelEffectsForState(id, localState) {
+    const ch = localState.characters[id];
+    const def = D.CHARACTER_DEFS[id];
     const total = {};
     def.panels.forEach((p) => {
       if (ch.unlockedPanels.includes(p.id) && p.effect) {
@@ -138,46 +192,57 @@
     return stats;
   }
 
-  function panelEffectsForState(id, localState) {
-    const ch = localState.characters[id];
-    const def = D.CHARACTER_DEFS[id];
-    const total = {};
-    def.panels.forEach((p) => {
-      if (ch.unlockedPanels.includes(p.id) && p.effect) {
-        Object.entries(p.effect).forEach(([stat, value]) => { total[stat] = (total[stat] || 0) + value; });
-      }
-    });
-    return total;
-  }
-
   function capResources(id, localState = state) {
-    const ch = localState.characters[id];
-    const stats = getStats(id, localState);
-    ch.hp = clamp(ch.hp, 0, stats.maxHp);
-    ch.mp = clamp(ch.mp, 0, stats.maxMp);
+    const ch = localState.characters[id]; const stats = getStats(id, localState);
+    ch.hp = clamp(ch.hp, 0, stats.maxHp); ch.mp = clamp(ch.mp, 0, stats.maxMp);
   }
 
   function currentSkills(id) {
-    const def = getDef(id);
-    const ch = getChar(id);
+    const def = getDef(id); const ch = getChar(id);
     const unlocked = def.panels.filter((p) => ch.unlockedPanels.includes(p.id) && p.skill).map((p) => p.skill);
-    return [...new Set([...def.starterSkills, ...unlocked])].map((skillId) => D.SKILLS[skillId]);
+    return [...new Set([...def.starterSkills, ...unlocked])].map((skillId) => D.SKILLS[skillId]).filter(Boolean);
+  }
+
+  function unlockedPassives(id) {
+    const def = getDef(id); const ch = getChar(id);
+    const base = def.traits || [];
+    const panel = def.panels.filter((p) => ch.unlockedPanels.includes(p.id) && p.passive).map((p) => D.PASSIVES[p.passive]).filter(Boolean);
+    return [...base, ...panel];
+  }
+
+  function hasPassive(id, effect) { return unlockedPassives(id).some((p) => p.effect === effect); }
+
+  function masteryState(id, skillId) {
+    const ch = getChar(id); ch.skillMastery ||= {};
+    if (!ch.skillMastery[skillId]) ch.skillMastery[skillId] = { level: 1, exp: 0 };
+    return ch.skillMastery[skillId];
+  }
+  function masteryRequired(level) { return 3 + Math.floor(level * level * 2.7); }
+  function skillMasteryLevel(id, skillId) { return masteryState(id, skillId).level; }
+  function skillMasteryLabel(id, skillId) {
+    const m = masteryState(id, skillId);
+    return m.level >= 10 ? '熟練Lv.10 MAX' : `熟練Lv.${m.level}　${m.exp}/${masteryRequired(m.level)}`;
+  }
+  function gainMastery(id, skill) {
+    const m = masteryState(id, skill.id); let gain = 1 + (hasPassive(id,'mastery_plus') ? 1 : 0);
+    if (m.level >= 10) return false;
+    m.exp += gain; let raised = false;
+    while (m.level < 10 && m.exp >= masteryRequired(m.level)) { m.exp -= masteryRequired(m.level); m.level += 1; raised = true; }
+    if (raised) { toast(`${getDef(id).short}：${skill.name} の習熟度が Lv.${m.level} に上昇！`, 'good'); audio.sfx('unlock'); }
+    return raised;
+  }
+  function masteryScale(id, skill) {
+    const level = skillMasteryLevel(id, skill.id);
+    return { level, potency: 1 + (level - 1) * (skill.mastery?.powerRate || .1), durationBonus: level >= 6 ? 1 : 0, max: level >= 10 };
   }
 
   function levelExpRequired(level) { return 44 + (level - 1) * 34; }
 
   function addCharacterExp(id, amount) {
-    const ch = getChar(id);
-    ch.exp += amount;
-    const levels = [];
+    const ch = getChar(id); ch.exp += amount; const levels = [];
     while (ch.exp >= levelExpRequired(ch.level)) {
-      ch.exp -= levelExpRequired(ch.level);
-      ch.level += 1;
-      ch.panelPoints += 1;
-      const stats = getStats(id);
-      ch.hp = stats.maxHp;
-      ch.mp = stats.maxMp;
-      levels.push(ch.level);
+      ch.exp -= levelExpRequired(ch.level); ch.level += 1; ch.panelPoints += 3;
+      const stats = getStats(id); ch.hp = stats.maxHp; ch.mp = stats.maxMp; levels.push(ch.level);
     }
     return levels;
   }
@@ -242,9 +307,9 @@
     saveGame();
     render();
     const extra = id === 'q_herb'
-      ? '\n\n白零は、薬草を受け取った治療師の表情を見つめていた。\n「……助けることは、損傷を防止する以上の意味を持つのですね。」\n\n【物語パネル：「守りたい」が解放条件を満たしました】'
+      ? '\n\n治療師は、薬草を抱えて何度も頭を下げた。\n白零「……よかった。間に合ったんですね。」\n虹全「うん。白零が見つけてくれたからだ。」\n白零「私が……役に立てた？」\n虹全「もちろん。」\n\n【物語パネル：「守りたい」が解放条件を満たしました】'
       : id === 'q_boss'
-        ? '\n\n黒零は、傷ついた森を見た。\n「……これは、壊してはいけない。次に触れたら、私が壊す。」\n\n【物語パネル：「壊したくない」が解放条件を満たしました】'
+        ? '\n\n黒零は、獣王が去った森をしばらく見ていた。\n黒零「……静かになった。」\n虹全「もう、怯えなくていい。」\n黒零「うん。この森は、壊させない。」\n\n【物語パネル：「壊したくない」が解放条件を満たしました】'
         : '';
     showDialogue('依頼達成', `《枝角亭》の受付は、静かに認定証を差し出した。\n「よくやったね。これで次の依頼も任せられる。」${extra}`);
   }
@@ -310,24 +375,19 @@
     const ch = getChar(id);
     if (ch.unlockedPanels.includes(panel.id)) return false;
     if (panel.prerequisite && !ch.unlockedPanels.includes(panel.prerequisite)) return false;
+    if (panel.requiresAll && !panel.requiresAll.every((need) => ch.unlockedPanels.includes(need))) return false;
     if (panel.minLevel && ch.level < panel.minLevel) return false;
     if (panel.storyFlag && !state.flags[panel.storyFlag]) return false;
     return ch.panelPoints >= panel.cost;
   }
 
   function unlockPanel(id, panelId) {
-    const panel = getDef(id).panels.find((p) => p.id === panelId);
+    const panel = getDef(id).panels.find((p) => p.id === panelId); const ch = getChar(id);
     if (!panel || !canUnlockPanel(id, panel)) return;
-    const ch = getChar(id);
-    ch.panelPoints -= panel.cost;
-    ch.unlockedPanels.push(panel.id);
-    const before = getStats(id);
-    capResources(id);
+    ch.panelPoints -= panel.cost; ch.unlockedPanels.push(panel.id); capResources(id);
     const delta = panel.effect?.maxHp || panel.effect?.maxMp ? ' 最大値が上昇した。' : '';
     appendLog(`${getDef(id).short}がパネル「${panel.name}」を解放。`);
-    toast(`${getDef(id).short}：${panel.name} を解放！${delta}`, 'good');
-    saveGame();
-    render();
+    audio.sfx('unlock'); toast(`${getDef(id).short}：${panel.name} を解放！${delta}`, 'good'); saveGame(); render();
   }
 
   function render() {
@@ -344,6 +404,7 @@
     else if (scene === 'battle') root.innerHTML = renderBattle();
     else root.innerHTML = renderWorld();
     window.requestAnimationFrame(drawVisibleCanvases);
+    syncAudioTheme();
   }
 
   function renderStatusStrip() {
@@ -367,22 +428,22 @@
   function renderTitle() {
     return `<section class="hero">
       <div class="hero-content">
-        <div class="hero-eyebrow">PIXEL COMMAND RPG　— PROTOTYPE —</div>
+        <div class="hero-eyebrow">PIXEL FANTASY RPG　— PROTOTYPE v0.3 —</div>
         <h1>全零〈オムニル〉<br><span class="rainbow-text">星なき始まり</span></h1>
-        <p>自由も、好きも、嫌いも知らない三人。<br>白、黒、そして虹の名を持つ彼らは、命令ではなく自分の意志で、世界を歩き始める。</p>
+        <p>何も持たなかった三人が、出会いと旅の中で自分の意志を見つけていく。<br>白、黒、そして虹。零から始まる、三人の物語。</p>
         <div class="button-row">
           <button class="primary-button" data-action="start">${state.started ? '旅を続ける' : '物語を始める'}</button>
           ${state.started ? '<button class="secondary-button" data-action="reset-confirm">最初からやり直す</button>' : ''}
         </div>
       </div>
     </section>
-    <h2 class="section-title">この試作版で遊べること</h2>
+    <h2 class="section-title">v0.3で遊べること</h2>
     <div class="grid three">
       <article class="card"><h3>◫ 世界と探索</h3><p>広域マップから町・草原・森・遺構を選択。探索で素材、宝、戦闘イベントが発生する。</p></article>
       <article class="card"><h3>⚔ コマンド戦闘</h3><p>虹全・白零・黒零を順番に操作する、軽量な3人パーティ制ターンバトル。</p></article>
-      <article class="card"><h3>◉ 成長パネル</h3><p>レベルで得るポイントを使い、能力値・技・物語に連動する固有パネルを解放する。</p></article>
+      <article class="card"><h3>◉ 成長パネル</h3><p>技30・パッシブ10・能力値40の巨大パネル。技は使うほど熟練Lv.10まで成長する。</p></article>
     </div>
-    <p class="note">※人物イラストは後から差し替え可能な専用枠として実装。現在はゲーム内の仮ピクセル肖像を表示しています。</p>`;
+    <p class="note">※現在のマップ・人物・敵は「遊びの芯を確認するための仮ドット」。次段階で世界の色設計、地形タイル、立ち絵、敵アニメーションまで本制作します。</p>`;
   }
 
   function renderWorld() {
@@ -418,16 +479,15 @@
           <button class="facility-hotspot" style="left:72%;top:48%;" data-action="facility" data-id="craft">製造所</button>
           <button class="facility-hotspot" style="left:48%;top:70%;" data-action="facility" data-id="inn">宿屋</button>
           <button class="facility-hotspot" style="left:78%;top:73%;" data-action="facility" data-id="sell">買取所</button>
-        </div></div>
-        <div class="location-caption"><strong>《枝角亭》のある、草原の宿場町</strong><p>街の施設を選び、依頼の受注、買い物、製造、休息、素材売却を行える。</p></div>
+        </div></div><div class="location-caption"><strong>《枝角亭》のある、草原の宿場町</strong><p>街の施設を選び、依頼の受注、買い物、製造、休息、素材売却を行える。</p></div>
         <h2 class="section-title">施設一覧</h2><div class="facility-grid">${renderFacilityCards()}</div>`;
     }
+    const auto = state.autoExplore && state.autoExplore.locationId === loc.id;
     return `${renderStatusStrip()}<button class="small-button" data-action="go-world">← 世界地図へ</button>
       <h1 class="page-title" style="margin-top:13px;">${loc.name}</h1><p class="page-subtitle">${loc.description}</p>
-      <div class="location-hero"><canvas id="locationCanvas" class="location-canvas" data-location="${loc.id}" width="800" height="360"></canvas></div>
-      ${renderPartyStrip()}
-      <div class="card" style="margin-top:12px;"><h3>探索準備</h3><p>探索を行うと敵、素材、宝箱、物語の気配などを発見します。HPが0の仲間がいると探索できません。</p>
-      <div class="button-row" style="margin-top:12px;"><button class="action-button" data-action="explore" data-id="${loc.id}">探索する</button><button class="secondary-button" data-action="go-world">撤退して世界地図へ</button></div></div>
+      <div class="location-hero"><canvas id="locationCanvas" class="location-canvas" data-location="${loc.id}" width="800" height="360"></canvas></div>${renderPartyStrip()}
+      <div class="card" style="margin-top:12px;"><h3>探索準備</h3><p>手動探索は1回ずつイベントを確認します。オート探索は5回分を連続で実行し、戦闘に遭遇した時は自動戦闘へ切り替わります。</p>
+      ${auto ? `<div class="automation-status"><b>オート探索中</b><span>残り ${state.autoExplore.remaining} 回</span><button class="small-button" data-action="cancel-auto-explore">中止</button></div>` : `<div class="button-row" style="margin-top:12px;"><button class="action-button" data-action="explore" data-id="${loc.id}">探索する</button><button class="secondary-button" data-action="auto-explore" data-id="${loc.id}">オート探索 ×5</button><button class="secondary-button" data-action="go-world">撤退して世界地図へ</button></div>`}</div>
       <p class="note">危険度：${loc.id === 'fallen_ruins' ? '高' : loc.id === 'whisper_woods' ? '中' : '低'} ／ 冒険者条件：${loc.rank}</p>`;
   }
 
@@ -449,47 +509,49 @@
 
   function renderCharacterCard(id) {
     const def = getDef(id); const ch = getChar(id); const stats = getStats(id); const equipment = state.equipment[id] ? D.EQUIPMENT_DEFS[state.equipment[id]] : null;
-    return `<article class="card character-card">
-      <canvas class="portrait-large" data-portrait="${id}" width="112" height="156"></canvas>
+    const traitText = (def.traits || []).map((t)=>t.name).join('／');
+    const skillCount = currentSkills(id).length; const unlocked = { skill:0, passive:0, stat:0 };
+    def.panels.forEach((p)=>{ if(ch.unlockedPanels.includes(p.id) && unlocked[p.category] !== undefined) unlocked[p.category] += 1; });
+    return `<article class="card character-card"><canvas class="portrait-large" data-portrait="${id}" width="112" height="156"></canvas>
       <div><h2>${def.name}</h2><div class="subtitle">${def.subtitle}　／　${def.role}</div>
       <div class="meter-label"><span>HP ${ch.hp} / ${stats.maxHp}</span><span>Lv.${ch.level}</span></div><div class="meter"><span style="width:${pct(ch.hp,stats.maxHp)}%"></span></div>
       <div class="meter-label"><span>MP ${ch.mp} / ${stats.maxMp}</span><span>経験値 ${ch.exp}/${levelExpRequired(ch.level)}</span></div><div class="meter mp"><span style="width:${pct(ch.mp,stats.maxMp)}%"></span></div>
-      <div class="trait-box"><b>${def.trait.name}</b><br>${def.trait.description}</div>
-      <div class="stat-grid">${[['攻撃',stats.atk],['防御',stats.def],['魔力',stats.mag],['敏捷',stats.agi],['幸運',stats.luck],['技能',currentSkills(id).length],['PT',ch.panelPoints]].map(([n,v])=>`<div class="stat-box"><span>${n}</span><strong>${v}</strong></div>`).join('')}</div>
-      <div class="note">装備：${equipment ? equipment.name : 'なし'}　／　技：${currentSkills(id).map((s)=>s.name).join('、')}</div>
-      <div class="character-actions" style="margin-top:10px;"><button class="small-button" data-action="open-panel" data-id="${id}">成長パネル</button><button class="small-button" data-action="view-character" data-id="${id}">人物詳細</button></div></div>
-    </article>`;
+      <div class="trait-box"><b>種族特性（3）</b><br>${traitText}</div>
+      <div class="stat-grid">${[['攻撃',stats.atk],['防御',stats.def],['魔力',stats.mag],['敏捷',stats.agi],['技',`${unlocked.skill}/30`],['常時',`${unlocked.passive}/10`],['能力',`${unlocked.stat}/40`],['PT',ch.panelPoints]].map(([n,v])=>`<div class="stat-box"><span>${n}</span><strong>${v}</strong></div>`).join('')}</div>
+      <div class="note">装備：${equipment ? equipment.name : 'なし'}　／　習得技：${skillCount}　／　遠い到達点：${def.teriosName}</div>
+      <div class="character-actions" style="margin-top:10px;"><button class="small-button" data-action="open-panel" data-id="${id}">成長パネル</button><button class="small-button" data-action="view-character" data-id="${id}">人物詳細</button></div></div></article>`;
+  }
+
+  function panelRequirementText(id,panel) {
+    const ch=getChar(id); const lacks=[];
+    if(panel.prerequisite && !ch.unlockedPanels.includes(panel.prerequisite)) lacks.push('前提');
+    if(panel.requiresAll && !panel.requiresAll.every((need)=>ch.unlockedPanels.includes(need))) lacks.push('3系統の終端');
+    if(panel.minLevel && ch.level < panel.minLevel) lacks.push(`Lv.${panel.minLevel}`);
+    if(panel.storyFlag && !state.flags[panel.storyFlag]) lacks.push(panel.storyFlag.startsWith('terios')?'テリオス覚醒':'物語');
+    if(ch.panelPoints < panel.cost) lacks.push('PT不足');
+    return lacks.join('・');
   }
 
   function renderPanel() {
-    const id = state.selectedCharacter;
-    const def = getDef(id); const ch = getChar(id); const stats = getStats(id);
-    return `${renderStatusStrip()}<button class="small-button" data-action="go-party">← 仲間一覧へ</button>
-      <h1 class="page-title" style="margin-top:13px;">${def.name}：成長パネル</h1>
-      <p class="page-subtitle">レベルアップで得たパネルポイントを使い、能力と技を解放します。物語に関わるパネルには追加条件があります。</p>
-      <div class="card"><div style="display:flex;justify-content:space-between;gap:10px;align-items:center;"><div><strong>所持パネルポイント</strong><div class="note">Lv.${ch.level}／${def.role}</div></div><strong style="font-size:27px;color:var(--gold);">${ch.panelPoints} PT</strong></div>
-      <div class="stat-grid" style="margin-top:12px;">${[['HP',stats.maxHp],['MP',stats.maxMp],['攻撃',stats.atk],['防御',stats.def],['魔力',stats.mag],['敏捷',stats.agi]].map(([n,v])=>`<div class="stat-box"><span>${n}</span><strong>${v}</strong></div>`).join('')}</div></div>
-      <h2 class="section-title">${def.short}のパネル</h2><div class="panel-board">${def.panels.map((p) => renderSkillPanel(id,p)).join('')}</div>`;
+    const id=state.selectedCharacter; const def=getDef(id); const ch=getChar(id); const stats=getStats(id);
+    const count={skill:0,passive:0,stat:0}; def.panels.forEach(p=>{if(ch.unlockedPanels.includes(p.id)&&count[p.category]!==undefined)count[p.category]++;});
+    const labels=id==='rainbow'?['↑ 始まり：回復・強化','→ 終わり：攻撃・弱体','↓ 調律：防御・特殊','← 原初：全能（テリオス後）']:id==='white'?['← 回復の道','→ 祝福と光刃の道','↓ アルファ・テリオス']:['← 破壊の道','→ 妨害と断絶の道','↓ オメガ・テリオス'];
+    return `${renderStatusStrip()}<button class="small-button" data-action="go-party">← 仲間一覧へ</button><h1 class="page-title" style="margin-top:13px;">${def.name}：成長パネル</h1>
+      <p class="page-subtitle">技30・パッシブ10・能力値40。隣接するパネルを順に解放します。習得した技は使うほど熟練Lv.10まで成長します。</p>
+      <div class="card panel-summary"><div><strong>所持パネルポイント</strong><div class="note">Lv.${ch.level}／${def.role}</div></div><strong class="panel-pt">${ch.panelPoints} PT</strong><div class="panel-counts"><span>技 ${count.skill}/30</span><span>常時 ${count.passive}/10</span><span>能力 ${count.stat}/40</span></div></div>
+      <div class="panel-legend">${labels.map(x=>`<span>${x}</span>`).join('')}</div>
+      <div class="panel-viewport"><div class="panel-map panel-map-${id}">
+        <div class="panel-core">${def.panels.find(p=>p.category==='core').name}<small>根源</small></div>
+        ${def.panels.filter(p=>p.category!=='core').map(p=>renderSkillPanel(id,p)).join('')}
+      </div></div>
+      <p class="note">★ 技　◈ パッシブ　＋ 能力値　／　黄色いパネルは現在解放可能。テリオス盤は物語後半の覚醒と、各系統の終端解放で開きます。</p>`;
   }
 
-  function renderSkillPanel(id, panel) {
-    const ch = getChar(id);
-    const unlocked = ch.unlockedPanels.includes(panel.id);
-    const available = canUnlockPanel(id, panel);
-    let status = unlocked ? 'unlocked' : available ? 'available' : 'locked';
-    let requirement = '';
-    if (!unlocked) {
-      const lacks = [];
-      if (panel.prerequisite && !ch.unlockedPanels.includes(panel.prerequisite)) lacks.push('前提パネル');
-      if (panel.minLevel && ch.level < panel.minLevel) lacks.push(`Lv.${panel.minLevel}`);
-      if (panel.storyFlag && !state.flags[panel.storyFlag]) lacks.push('物語進行');
-      if (ch.panelPoints < panel.cost) lacks.push('PT不足');
-      requirement = lacks.length ? `／ ${lacks.join('・')}` : '';
-    }
-    const icon = panel.category === 'skill' ? '✦' : panel.category === 'trait' ? '◈' : '＋';
-    return `<button class="skill-panel ${status}" data-action="unlock-panel" data-id="${id}" data-panel="${panel.id}" ${unlocked || !available ? 'disabled' : ''}>
-      <span class="node ${panel.category}">${icon}</span><span><strong>${panel.name}</strong><small>${panel.description}</small></span><span class="cost">${unlocked ? '解放済' : `${panel.cost} PT${requirement}`}</span>
-    </button>`;
+  function renderSkillPanel(id,panel) {
+    const ch=getChar(id); const unlocked=ch.unlockedPanels.includes(panel.id); const available=canUnlockPanel(id,panel); const status=unlocked?'unlocked':available?'available':'locked';
+    const icon=panel.category==='skill'?'★':panel.category==='passive'?'◈':'＋'; const req=!unlocked?panelRequirementText(id,panel):'';
+    const style=`left:${panel.position.x}px;top:${panel.position.y}px;`;
+    return `<button class="panel-node ${status} node-${panel.category} branch-${panel.branch}" style="${style}" data-action="unlock-panel" data-id="${id}" data-panel="${panel.id}" ${unlocked||!available?'disabled':''} title="${panel.description}"><span>${icon}</span><b>${panel.name}</b><small>${unlocked?'解放済':`${panel.cost}PT${req?`／${req}`:''}`}</small></button>`;
   }
 
   function renderQuestLog() {
@@ -515,19 +577,20 @@
 
 
   function renderBattleControls(actorId, actor, def) {
-    const b = state.battle;
-    if (b.phase === 'enemy') return `<div class="empty-state">敵が行動中……</div>`;
-    if (!actorId || !actor || actor.hp <= 0) return `<div class="empty-state">行動順を調整中……</div>`;
-    if (b.phase === 'command') return `<div style="font-size:12px;margin-bottom:8px;"><b>${def.short} の行動</b>　<span style="color:var(--muted);">${def.role}</span></div><div class="command-row"><button class="command-button" data-action="battle-command" data-command="attack">攻撃</button><button class="command-button" data-action="battle-command" data-command="skills">技</button><button class="command-button" data-action="battle-command" data-command="guard">防御</button><button class="command-button" data-action="battle-command" data-command="items">道具</button></div>`;
-    if (b.phase === 'skills') return `<div style="display:flex;justify-content:space-between;align-items:center;"><b style="font-size:12px;">使用する技を選択</b><button class="small-button" data-action="battle-back">戻る</button></div><div class="skill-menu">${currentSkills(actorId).map((skill)=>`<button class="skill-button" data-action="battle-skill" data-id="${skill.id}" ${actor.mp < skill.mp ? 'disabled':''}><b>${skill.name}</b><small>MP ${skill.mp}</small><span>${skill.description}</span></button>`).join('')}</div>`;
-    if (b.phase === 'items') {
-      const consumables = Object.values(D.ITEM_DEFS).filter((i)=>i.type==='consumable' && countItem(i.id)>0);
-      return `<div style="display:flex;justify-content:space-between;align-items:center;"><b style="font-size:12px;">使う道具を選択</b><button class="small-button" data-action="battle-back">戻る</button></div><div class="skill-menu">${consumables.length?consumables.map((item)=>`<button class="skill-button" data-action="battle-item" data-id="${item.id}"><b>${item.name} ×${countItem(item.id)}</b><small>道具</small><span>${item.description}</span></button>`).join(''):'<div class="empty-state">使える道具がありません。</div>'}</div>`;
-    }
-    if (b.phase === 'target-enemy') return `<div><b style="font-size:12px;">対象の敵を選択</b><div class="target-row">${b.enemies.filter(e=>e.hp>0).map((e,i)=>`<button class="target-button" data-action="battle-target-enemy" data-index="${i}">${e.name}<br>HP ${e.hp}</button>`).join('')}</div><div class="target-row"><button class="small-button" data-action="battle-back">戻る</button></div></div>`;
-    if (b.phase === 'target-ally') return `<div><b style="font-size:12px;">対象の仲間を選択</b><div class="target-row">${['rainbow','white','black'].filter(id=>getChar(id).hp>0).map(id=>`<button class="target-button" data-action="battle-target-ally" data-id="${id}">${getDef(id).short}<br>HP ${getChar(id).hp}/${getStats(id).maxHp}</button>`).join('')}</div><div class="target-row"><button class="small-button" data-action="battle-back">戻る</button></div></div>`;
+    const b=state.battle;
+    if (b.phase==='enemy') return `<div class="empty-state">敵が行動中……</div>`;
+    if (!actorId||!actor||actor.hp<=0) return `<div class="empty-state">行動順を調整中……</div>`;
+    const autoToggle=`<button class="auto-toggle ${b.auto?'on':''}" data-action="toggle-battle-auto">${b.auto?'AUTO ON':'AUTO OFF'}</button>`;
+    if (b.auto) return `<div class="automation-status"><b>${def.short} が自動行動中</b>${autoToggle}<span>熟練度も上がります</span></div>`;
+    if (b.phase==='command') return `<div class="battle-command-title"><span><b>${def.short} の行動</b>　<small>${def.role}</small></span>${autoToggle}</div><div class="command-row"><button class="command-button" data-action="battle-command" data-command="attack">攻撃</button><button class="command-button" data-action="battle-command" data-command="skills">技</button><button class="command-button" data-action="battle-command" data-command="guard">防御</button><button class="command-button" data-action="battle-command" data-command="items">道具</button></div>`;
+    if (b.phase==='skills') return `<div style="display:flex;justify-content:space-between;align-items:center;"><b style="font-size:12px;">使用する技を選択</b><button class="small-button" data-action="battle-back">戻る</button></div><div class="skill-menu">${currentSkills(actorId).map(skill=>`<button class="skill-button" data-action="battle-skill" data-id="${skill.id}" ${actor.mp<skill.mp?'disabled':''}><b>${skill.name}</b><small>MP ${skill.mp}　${skillMasteryLabel(actorId,skill.id)}</small><span>${skill.description}<em>${masteryHint(actorId,skill)}</em></span></button>`).join('')}</div>`;
+    if (b.phase==='items') { const consumables=Object.values(D.ITEM_DEFS).filter(i=>i.type==='consumable'&&countItem(i.id)>0); return `<div style="display:flex;justify-content:space-between;align-items:center;"><b style="font-size:12px;">使う道具を選択</b><button class="small-button" data-action="battle-back">戻る</button></div><div class="skill-menu">${consumables.length?consumables.map(item=>`<button class="skill-button" data-action="battle-item" data-id="${item.id}"><b>${item.name} ×${countItem(item.id)}</b><small>道具</small><span>${item.description}</span></button>`).join(''):'<div class="empty-state">使える道具がありません。</div>'}</div>`; }
+    if (b.phase==='target-enemy') return `<div><b style="font-size:12px;">対象の敵を選択</b><div class="target-row">${getAliveEnemies().map((e,i)=>`<button class="target-button" data-action="battle-target-enemy" data-index="${i}">${e.name}<br>HP ${e.hp}</button>`).join('')}</div><div class="target-row"><button class="small-button" data-action="battle-back">戻る</button></div></div>`;
+    if (b.phase==='target-ally') { const skill=b.selected?.skillId?D.SKILLS[b.selected.skillId]:null; const targets=skill?.revive||skill?.reviveAll?['rainbow','white','black']:['rainbow','white','black'].filter(id=>getChar(id).hp>0); return `<div><b style="font-size:12px;">対象の仲間を選択</b><div class="target-row">${targets.map(id=>`<button class="target-button" data-action="battle-target-ally" data-id="${id}">${getDef(id).short}<br>HP ${getChar(id).hp}/${getStats(id).maxHp}</button>`).join('')}</div><div class="target-row"><button class="small-button" data-action="battle-back">戻る</button></div></div>`; }
     return '<div class="empty-state">行動を選択してください。</div>';
   }
+
+  function masteryHint(id,skill) { const m=skillMasteryLevel(id,skill.id); return m>=10?'　★極意効果発動中':m>=6?'　◆持続・効果強化':m>=3?'　◆効果強化':''; }
 
   function startGame() {
     state.started = true;
@@ -537,7 +600,7 @@
     if (!state.flags.openingSeen) {
       state.flags.openingSeen = true;
       saveGame();
-      showDialogue('序章：命令の外側', '薄い霧の向こうに、宿場町リンドホルムの灯りが見えた。\n\n虹全「目的を確認。補給、情報収集、行動範囲の確保。」\n白零「承認。損傷を防止します。」\n黒零「障害があれば排除する。」\n\n三人はまだ、これが“旅の始まり”だと知らない。');
+      showDialogue('序章：星なき始まり', '薄い霧の向こうに、宿場町リンドホルムの灯りが見えた。\n\n虹全「着いたな。今日はここで休もう。」\n白零「……わかった。虹全は、どこか痛くない？」\n虹全「俺は平気。白零と黒零は？」\n黒零「問題ない。人が多いなら、近づかれない方がいい。」\n虹全「わかった。無理に話さなくていい。まずは腹ごしらえだ。」\n\n三人はまだ、この小さな町から始まる旅が、世界の均衡へ続いていることを知らない。');
     }
   }
 
@@ -550,56 +613,31 @@
     render();
   }
 
-  function explorationAvailable() {
-    return Object.keys(state.characters).every((id) => getChar(id).hp > 0);
+  function explorationAvailable() { return Object.keys(state.characters).every((id)=>getChar(id).hp>0); }
+
+  function autoResult(text) { if(state.autoExplore){ state.autoExplore.results.push(text); } }
+  function explore(locationId, fromAuto=false) {
+    if (!explorationAvailable()) { if(fromAuto) return stopAutoExplore('仲間が戦闘不能になったため中止しました。'); toast('戦闘不能の仲間がいます。宿屋で休んでください。','warn'); return 'stop'; }
+    const loc=D.LOCATIONS[locationId]; if(!loc?.enemyPool) return 'stop'; const roll=Math.random();
+    if(roll<.54){ let enemies=[choice(loc.enemyPool)]; if(loc.id==='windy_plain'&&Math.random()<.26)enemies.push(choice(['pale_slime','grass_hare'])); if(loc.id==='whisper_woods'&&Math.random()<.26)enemies.push(choice(['wind_wolf','whisper_treant'])); if(loc.id==='fallen_ruins'&&Math.random()<.22)enemies.push('ruin_sentinel'); if(loc.id==='whisper_woods'&&state.flags.anger!==true&&state.adventureExp>=90&&Math.random()<.12)enemies=['moss_wolf']; startBattle(enemies,loc.id,{auto:fromAuto||state.automation.battleAutoDefault,autoExplore:fromAuto}); return 'battle'; }
+    if(roll<.88){ const item=choice(loc.materialPool); const qty=rng(1,item==='herb'?3:2); addItem(item,qty); const text=`${D.ITEM_DEFS[item].name} ×${qty}`; appendLog(`${loc.name}で ${text} を見つけた。`); autoResult(`素材：${text}`); if(!fromAuto)toast(`${text} を発見！`,'good'); saveGame(); if(!fromAuto)render(); return 'loot'; }
+    const gold=rng(18,44); state.gold+=gold; appendLog(`${loc.name}で古い袋を発見。${gold}Gを得た。`); autoResult(`${gold}G を発見`); if(!fromAuto)toast(`古い袋を発見。${gold}Gを得た！`,'good'); saveGame(); if(!fromAuto)render(); return 'gold';
   }
 
-  function explore(locationId) {
-    if (!explorationAvailable()) return toast('戦闘不能の仲間がいます。宿屋で休んでください。', 'warn');
-    const loc = D.LOCATIONS[locationId];
-    if (!loc?.enemyPool) return;
-    const roll = Math.random();
-    if (roll < 0.54) {
-      let enemies = [choice(loc.enemyPool)];
-      if (loc.id === 'windy_plain' && Math.random() < .26) enemies.push(choice(['pale_slime','grass_hare']));
-      if (loc.id === 'whisper_woods' && Math.random() < .26) enemies.push(choice(['wind_wolf','whisper_treant']));
-      if (loc.id === 'fallen_ruins' && Math.random() < .22) enemies.push('ruin_sentinel');
-      if (loc.id === 'whisper_woods' && state.flags.anger !== true && state.adventureExp >= 90 && Math.random() < .12) enemies = ['moss_wolf'];
-      startBattle(enemies, loc.id);
-      return;
-    }
-    if (roll < 0.88) {
-      const item = choice(loc.materialPool);
-      const qty = rng(1, item === 'herb' ? 3 : 2);
-      addItem(item, qty);
-      appendLog(`${loc.name}で ${D.ITEM_DEFS[item].name} ×${qty} を見つけた。`);
-      toast(`${D.ITEM_DEFS[item].name} ×${qty} を発見！`, 'good');
-      saveGame(); render();
-      return;
-    }
-    const gold = rng(18, 44);
-    state.gold += gold;
-    appendLog(`${loc.name}で古い袋を発見。${gold}Gを得た。`);
-    toast(`古い袋を発見。${gold}Gを得た！`, 'good');
-    saveGame(); render();
+  function startAutoExplore(locationId) {
+    if(!explorationAvailable()) return toast('戦闘不能の仲間がいます。宿屋で休んでください。','warn');
+    state.autoExplore={locationId,remaining:5,results:[]}; appendLog(`${D.LOCATIONS[locationId].name}でオート探索を開始。`); render(); window.setTimeout(runAutoExploreStep,250);
   }
+  function runAutoExploreStep() {
+    const a=state.autoExplore; if(!a||state.battle) return; if(a.remaining<=0) return finishAutoExplore(); a.remaining-=1; const outcome=explore(a.locationId,true); render(); if(outcome!=='battle') window.setTimeout(runAutoExploreStep,420);
+  }
+  function finishAutoExplore() { const a=state.autoExplore; if(!a)return; const summary=a.results.length?a.results.map(x=>`・${x}`).join('\n'):'目立った発見はなかった。'; state.autoExplore=null; saveGame(); render(); showDialogue('オート探索 完了',`5回の探索を終えた。\n\n${summary}`); }
+  function stopAutoExplore(reason='オート探索を中止しました。') { if(!state.autoExplore)return; state.autoExplore=null; saveGame(); render(); toast(reason,'warn'); }
 
-  function startBattle(enemyIds, locationId) {
-    const enemies = enemyIds.map((id, i) => {
-      const d = D.ENEMIES[id];
-      return { ...deepCopy(d), uid: `${id}_${Date.now()}_${i}`, hp: d.maxHp, status: {} };
-    });
-    state.battle = {
-      locationId,
-      enemies,
-      turnIndex: 0,
-      order: ['rainbow','white','black'],
-      phase: 'command',
-      selected: null,
-      log: `${enemies.map((e)=>e.name).join('、')} が現れた！`,
-    };
-    state.scene = 'battle';
-    render();
+  function startBattle(enemyIds, locationId, options={}) {
+    const enemies=enemyIds.map((id,i)=>{const d=D.ENEMIES[id];return {...deepCopy(d),uid:`${id}_${Date.now()}_${i}`,hp:d.maxHp,status:{}};});
+    state.battle={locationId,enemies,turnIndex:0,order:['rainbow','white','black'],phase:'command',selected:null,auto:!!options.auto,autoExplore:!!options.autoExplore,log:`${enemies.map(e=>e.name).join('、')} が現れた！`};
+    state.scene='battle'; audio.sfx('hit'); render(); if(state.battle.auto) window.setTimeout(runAutoTurn,360);
   }
 
   function battleLog(message) {
@@ -614,253 +652,57 @@
   }
 
   function renderBattle() {
-    const b = state.battle;
-    if (!b) { state.scene = 'world'; return renderWorld(); }
-    const actorId = b.order[b.turnIndex];
-    const actor = actorId ? getChar(actorId) : null;
-    const actorDef = actorId ? getDef(actorId) : null;
-    const log = battleLogLines();
-    return `<section class="battle-shell">
-      <div class="battle-stage">
-        <div class="enemy-area">${b.enemies.filter((e)=>e.hp>0).map((enemy) => `<div class="battle-enemy"><canvas class="enemy-sprite" data-enemy="${enemy.id}" width="132" height="112"></canvas><div class="enemy-name">${enemy.name}</div><div class="enemy-hp meter"><span style="width:${pct(enemy.hp,enemy.maxHp)}%"></span></div><small style="font-size:9px;">HP ${enemy.hp}/${enemy.maxHp}${enemy.status?.fracture ? '　▽防御低下' : ''}</small></div>`).join('')}</div>
-        <div class="party-sprites">${['rainbow','white','black'].map((id)=>{const ch=getChar(id),s=getStats(id);return `<div class="battle-hero"><canvas data-portrait="${id}" width="54" height="54"></canvas><strong>${getDef(id).short}${ch.hp<=0?'（戦闘不能）':''}</strong><div class="meter"><span style="width:${pct(ch.hp,s.maxHp)}%"></span></div><div class="meter mp"><span style="width:${pct(ch.mp,s.maxMp)}%"></span></div></div>`}).join('')}</div>
-      </div>
-      <div class="battle-log">${log.slice(-3).map((x)=>`<div>› ${x}</div>`).join('')}</div>
-      <div class="battle-controls">${renderBattleControls(actorId, actor, actorDef)}</div>
-    </section>`;
+    const b=state.battle; if(!b){state.scene='world';return renderWorld();} const actorId=b.order[b.turnIndex]; const actor=actorId?getChar(actorId):null; const actorDef=actorId?getDef(actorId):null; const log=battleLogLines();
+    return `<section class="battle-shell"><div class="battle-stage"><div class="enemy-area">${b.enemies.filter(e=>e.hp>0).map(enemy=>`<div class="battle-enemy"><canvas class="enemy-sprite" data-enemy="${enemy.id}" width="132" height="112"></canvas><div class="enemy-name">${enemy.name}</div><div class="enemy-hp meter"><span style="width:${pct(enemy.hp,enemy.maxHp)}%"></span></div><small style="font-size:9px;">HP ${enemy.hp}/${enemy.maxHp}${enemyStatusText(enemy)}</small></div>`).join('')}</div><div class="party-sprites">${['rainbow','white','black'].map(id=>{const ch=getChar(id),st=getStats(id);return `<div class="battle-hero"><canvas data-portrait="${id}" width="54" height="54"></canvas><strong>${getDef(id).short}${ch.hp<=0?'（戦闘不能）':''}</strong><div class="meter"><span style="width:${pct(ch.hp,st.maxHp)}%"></span></div><div class="meter mp"><span style="width:${pct(ch.mp,st.maxMp)}%"></span></div>${ch.barrier?'<small>◈障壁</small>':''}</div>`}).join('')}</div></div><div class="battle-log">${log.slice(-3).map(x=>`<div>› ${x}</div>`).join('')}</div><div class="battle-controls">${renderBattleControls(actorId,actor,actorDef)}</div></section>`;
   }
+  function enemyStatusText(enemy) { const s=enemy.status||{}; const list=[]; if(s.fracture)list.push('▽防御'); if(s.weaken)list.push('▽攻撃');if(s.slow)list.push('▽敏捷');if(s.bind)list.push('縛');return list.length?`　${list.join(' ')}`:''; }
 
   function getAliveAllies() { return ['rainbow','white','black'].filter((id)=>getChar(id).hp > 0); }
   function getAliveEnemies() { return state.battle.enemies.filter((e)=>e.hp > 0); }
 
   function battleCommand(command) {
-    const b = state.battle;
-    if (!b || b.phase !== 'command') return;
-    if (command === 'guard') {
-      const actorId = b.order[b.turnIndex];
-      getChar(actorId).guard = 1;
-      battleLog(`${getDef(actorId).short}は身構えた。`);
-      afterPlayerAction();
-      return;
-    }
-    b.phase = command === 'skills' ? 'skills' : command === 'items' ? 'items' : 'target-enemy';
-    b.selected = command === 'attack' ? { type: 'attack' } : null;
-    render();
+    const b=state.battle; if(!b||b.phase!=='command'||b.auto)return;
+    if(command==='guard'){ const actorId=b.order[b.turnIndex]; getChar(actorId).guard=1; battleLog(`${getDef(actorId).short}は身構えた。`); afterPlayerAction(); return; }
+    b.phase=command==='skills'?'skills':command==='items'?'items':'target-enemy'; b.selected=command==='attack'?{type:'attack'}:null; render();
   }
+  function useBattleSkill(skillId) { const b=state.battle; const actorId=b.order[b.turnIndex]; const skill=D.SKILLS[skillId]; if(!skill||getChar(actorId).mp<skill.mp||b.auto)return; b.selected={type:'skill',skillId}; b.phase=skill.target==='enemy'?'target-enemy':skill.target==='ally'?'target-ally':'auto-skill'; if(b.phase==='auto-skill')executeSkill(actorId,skill,null);else render(); }
+  function useBattleItem(itemId) { const item=D.ITEM_DEFS[itemId]; if(!item||countItem(itemId)<1||state.battle.auto)return; state.battle.selected={type:'item',itemId};state.battle.phase='target-ally';render(); }
+  function targetEnemy(index) { const b=state.battle;const enemy=getAliveEnemies()[Number(index)];if(!enemy)return;const actorId=b.order[b.turnIndex];if(b.selected.type==='attack')executeAttack(actorId,enemy);else if(b.selected.type==='skill')executeSkill(actorId,D.SKILLS[b.selected.skillId],enemy); }
+  function targetAlly(id) {const b=state.battle; const actorId=b.order[b.turnIndex];if(b.selected.type==='item')executeItem(actorId,b.selected.itemId,id);else if(b.selected.type==='skill')executeSkill(actorId,D.SKILLS[b.selected.skillId],id);}
+  function toggleBattleAuto() { if(!state.battle)return; state.battle.auto=!state.battle.auto; battleLog(state.battle.auto?'自動戦闘を開始。':'自動戦闘を停止。'); render(); if(state.battle.auto)window.setTimeout(runAutoTurn,180); }
+  function chooseAutoAction(actorId) {
+    const skills=currentSkills(actorId).filter(s=>getChar(actorId).mp>=s.mp); const alive=getAliveAllies(); const down=['rainbow','white','black'].filter(id=>getChar(id).hp<=0); const lowest=alive.sort((a,b)=>pct(getChar(a).hp,getStats(a).maxHp)-pct(getChar(b).hp,getStats(b).maxHp))[0];
+    const low=lowest&&pct(getChar(lowest).hp,getStats(lowest).maxHp)<.42;
+    const revive=skills.filter(s=>(s.revive||s.reviveAll)&&down.length); if(revive.length)return {skill:revive.sort((a,b)=>b.mp-a.mp)[0],target:down[0]};
+    const heals=skills.filter(s=>s.heal&&(['ally','allAllies','self'].includes(s.target))); if(low&&heals.length){const best=heals.sort((a,b)=>(b.heal||0)-(a.heal||0))[0];return {skill:best,target:best.target==='ally'?lowest:null};}
+    const enemy=getAliveEnemies().sort((a,b)=>a.hp-b.hp)[0]; const damages=skills.filter(s=>s.power||s.allEnemyPower); if(damages.length){let pool=damages;if(actorId==='white'&&low)pool=heals.length?heals:damages;const best=pool.sort((a,b)=>((b.power||b.allEnemyPower||0)*1.1+b.mp*.01)-((a.power||a.allEnemyPower||0)*1.1+a.mp*.01))[0];return {skill:best,target:best.target==='enemy'?enemy:null};}
+    return {attack:enemy};
+  }
+  function runAutoTurn() { const b=state.battle;if(!b||!b.auto||b.phase==='enemy')return; const actorId=b.order[b.turnIndex];if(!actorId||getChar(actorId).hp<=0){afterPlayerAction();return;} const a=chooseAutoAction(actorId);if(a.skill)executeSkill(actorId,a.skill,a.target);else executeAttack(actorId,a.attack); }
 
-  function useBattleSkill(skillId) {
-    const b = state.battle; const actorId = b.order[b.turnIndex]; const skill = D.SKILLS[skillId];
-    if (!skill || getChar(actorId).mp < skill.mp) return;
-    b.selected = { type: 'skill', skillId };
-    b.phase = skill.target === 'enemy' ? 'target-enemy' : skill.target === 'ally' ? 'target-ally' : 'auto-skill';
-    if (b.phase === 'auto-skill') executeSkill(actorId, skill, null);
-    else render();
-  }
-
-  function useBattleItem(itemId) {
-    const item = D.ITEM_DEFS[itemId];
-    if (!item || countItem(itemId) < 1) return;
-    state.battle.selected = { type: 'item', itemId };
-    state.battle.phase = 'target-ally';
-    render();
-  }
-
-  function targetEnemy(index) {
-    const b = state.battle; const enemy = getAliveEnemies()[Number(index)];
-    if (!enemy) return;
-    const actorId = b.order[b.turnIndex];
-    if (b.selected.type === 'attack') executeAttack(actorId, enemy);
-    else if (b.selected.type === 'skill') executeSkill(actorId, D.SKILLS[b.selected.skillId], enemy);
-  }
-
-  function targetAlly(id) {
-    const b = state.battle; const actorId = b.order[b.turnIndex];
-    if (b.selected.type === 'item') executeItem(actorId, b.selected.itemId, id);
-    else if (b.selected.type === 'skill') executeSkill(actorId, D.SKILLS[b.selected.skillId], id);
-  }
-
-  function effectiveDefenderDef(target, isEnemy = false) {
-    let d = isEnemy ? target.def : getStats(target).def;
-    if (target.status?.fracture) d = Math.max(0, Math.floor(d * .67));
-    return d;
-  }
-
-  function dealDamage(attackerId, target, multiplier = 1, kind = 'physical', isEnemyTarget = true, bonusOnDebuff = 0) {
-    const attackerStats = getStats(attackerId);
-    const offensive = kind === 'magic' ? attackerStats.mag : attackerStats.atk;
-    let power = multiplier;
-    if (bonusOnDebuff && target.status?.fracture) power += bonusOnDebuff;
-    if (attackerId === 'rainbow' && getChar('rainbow').hp <= attackerStats.maxHp * .5) power *= 1.1;
-    if (attackerId === 'black' && target.status?.fracture) power *= 1.15;
-    const damage = Math.max(1, Math.floor(offensive * power - effectiveDefenderDef(target, isEnemyTarget) * .52 + rng(-3, 4)));
-    applyDamage(target, damage, isEnemyTarget);
-    return damage;
-  }
-
-  function applyDamage(target, damage, isEnemy) {
-    if (isEnemy) {
-      target.hp = Math.max(0, target.hp - damage);
-      return;
-    }
-    let targetId = target;
-    const ch = getChar(targetId);
-    const protectedBy = ch.protectedBy;
-    if (protectedBy && protectedBy !== targetId && getChar(protectedBy)?.hp > 0) {
-      targetId = protectedBy;
-      battleLog(`${getDef(protectedBy).short}が攻撃を受け止めた！`);
-    }
-    const defender = getChar(targetId);
-    let final = damage;
-    if (defender.guard) final = Math.max(1, Math.floor(final * .5));
-    defender.hp = Math.max(0, defender.hp - final);
-  }
-
-  function executeAttack(actorId, enemy) {
-    const dmg = dealDamage(actorId, enemy, 1, 'physical', true);
-    battleLog(`${getDef(actorId).short}の攻撃！ ${enemy.name}に${dmg}ダメージ。`);
-    resolveAfterHit();
-  }
-
-  function executeSkill(actorId, skill, target) {
-    const actor = getChar(actorId);
-    if (actor.mp < skill.mp) return;
-    actor.mp -= skill.mp;
-    if (skill.kind === 'heal') {
-      const targets = skill.target === 'allAllies' ? getAliveAllies() : [target];
-      targets.forEach((id) => {
-        const ch = getChar(id); const amount = Math.floor(getStats(id).maxHp * skill.heal);
-        ch.hp = clamp(ch.hp + amount, 0, getStats(id).maxHp);
-      });
-      battleLog(`${getDef(actorId).short}は ${skill.name} を使った。${skill.target === 'allAllies' ? '仲間全員の傷を癒した。' : `${getDef(target).short}のHPを回復。`}`);
-      resolveAfterHit(); return;
-    }
-    if (skill.kind === 'guard') {
-      getChar(target).protectedBy = actorId;
-      getChar(target).protectedTurns = 2;
-      battleLog(`${getDef(actorId).short}は ${getDef(target).short}に白光の護りを与えた。`);
-      resolveAfterHit(); return;
-    }
-    const dmg = dealDamage(actorId, target, skill.power, skill.kind, true, skill.bonusOnDebuff || 0);
-    if (skill.inflict) {
-      target.status ||= {};
-      target.status[skill.inflict.type] = skill.inflict.turns;
-    }
-    if (skill.lifeSteal) {
-      const heal = Math.max(1, Math.floor(dmg * skill.lifeSteal));
-      actor.hp = clamp(actor.hp + heal, 0, getStats(actorId).maxHp);
-    }
-    battleLog(`${getDef(actorId).short}の ${skill.name}！ ${target.name}に${dmg}ダメージ。`);
-    resolveAfterHit();
-  }
-
-  function executeItem(actorId, itemId, targetId) {
-    const item = D.ITEM_DEFS[itemId];
-    if (!takeItem(itemId, 1)) return;
-    const target = getChar(targetId);
-    if (item.effect.healHp) target.hp = clamp(target.hp + item.effect.healHp, 0, getStats(targetId).maxHp);
-    if (item.effect.healMp) target.mp = clamp(target.mp + item.effect.healMp, 0, getStats(targetId).maxMp);
-    battleLog(`${getDef(actorId).short}は ${item.name} を使った。${getDef(targetId).short}が回復した。`);
-    resolveAfterHit();
-  }
-
-  function resolveAfterHit() {
-    if (getAliveEnemies().length === 0) return finishBattle(true);
-    afterPlayerAction();
-  }
-
-  function afterPlayerAction() {
-    const b = state.battle;
-    b.selected = null;
-    b.turnIndex += 1;
-    while (b.turnIndex < b.order.length && getChar(b.order[b.turnIndex]).hp <= 0) b.turnIndex += 1;
-    if (b.turnIndex >= b.order.length) {
-      b.phase = 'enemy';
-      render();
-      window.setTimeout(enemyPhase, 520);
-    } else {
-      b.phase = 'command';
-      render();
-    }
-  }
-
-  function enemyPhase() {
-    const b = state.battle;
-    if (!b) return;
-    const enemies = getAliveEnemies();
-    for (const enemy of enemies) {
-      const targets = getAliveAllies();
-      if (!targets.length) return finishBattle(false);
-      const targetId = choice(targets);
-      const move = choice(enemy.skills);
-      const base = Math.max(1, Math.floor(enemy.atk * move.power - effectiveDefenderDef(targetId, false) * .45 + rng(-2, 4)));
-      applyDamage(targetId, base, false);
-      if (move.effect === 'fracture') {
-        getChar(targetId).status ||= {};
-        getChar(targetId).status.fracture = 2;
-      }
-      battleLog(`${enemy.name}の${move.name}！ ${getDef(targetId).short}に${base}ダメージ。`);
-      if (!getAliveAllies().length) return finishBattle(false);
-    }
-    tickBattleStatuses();
-    b.turnIndex = 0;
-    while (b.turnIndex < b.order.length && getChar(b.order[b.turnIndex]).hp <= 0) b.turnIndex += 1;
-    b.phase = 'command';
-    render();
-  }
-
-  function tickBattleStatuses() {
-    state.battle.enemies.forEach((enemy) => {
-      if (enemy.status?.fracture) { enemy.status.fracture -= 1; if (enemy.status.fracture <= 0) delete enemy.status.fracture; }
-    });
-    ['rainbow','white','black'].forEach((id) => {
-      const ch = getChar(id);
-      if (ch.guard) delete ch.guard;
-      if (ch.status?.fracture) { ch.status.fracture -= 1; if (ch.status.fracture <= 0) delete ch.status.fracture; }
-      if (ch.protectedTurns) { ch.protectedTurns -= 1; if (ch.protectedTurns <= 0) { delete ch.protectedTurns; delete ch.protectedBy; } }
-    });
-  }
-
-  function finishBattle(victory) {
-    const b = state.battle;
-    if (!b) return;
-    const loc = D.LOCATIONS[b.locationId];
-    if (!victory) {
-      state.gold = Math.max(0, state.gold - 15);
-      Object.keys(state.characters).forEach((id) => { const ch = getChar(id); ch.hp = Math.max(1, Math.floor(getStats(id).maxHp * .25)); ch.mp = Math.max(0, Math.floor(getStats(id).maxMp * .25)); });
-      state.battle = null; state.scene = 'location'; saveGame(); render();
-      showDialogue('撤退', `三人は ${loc.name} から撤退した。\n所持金を15G失い、傷ついた状態で戻ってきた。`);
-      return;
-    }
-    const defeated = b.enemies;
-    let exp = 0; let gold = 0; const drops = [];
-    defeated.forEach((enemy) => {
-      exp += enemy.exp; gold += enemy.gold;
-      state.kills[enemy.id] = (state.kills[enemy.id] || 0) + 1;
-      enemy.drops.forEach((drop) => {
-        if (Math.random() <= drop.chance) { const qty = rng(drop.qty[0], drop.qty[1]); addItem(drop.id, qty); drops.push({ id: drop.id, qty }); }
-      });
-    });
-    state.gold += gold;
-    const levelUps = [];
-    ['rainbow','white','black'].forEach((id) => {
-      const levels = addCharacterExp(id, exp);
-      if (levels.length) levelUps.push(`${getDef(id).short} Lv.${levels.join('・')}`);
-    });
-    // 白の器：戦闘後に最も傷ついた仲間を回復。
-    const lowest = getAliveAllies().sort((a,b)=>pct(getChar(a).hp,getStats(a).maxHp)-pct(getChar(b).hp,getStats(b).maxHp))[0];
-    if (lowest) getChar(lowest).hp = clamp(getChar(lowest).hp + Math.floor(getStats(lowest).maxHp*.05), 0, getStats(lowest).maxHp);
-    const first = !state.flags.firstVictory;
-    if (first) state.flags.firstVictory = true;
-    if (first) state.flags.choice = true;
-    state.battle = null;
-    state.scene = 'location';
-    appendLog(`${defeated.map((e)=>e.name).join('、')}を倒した。経験値${exp}／${gold}G`);
-    saveGame(); render();
-    const dropText = drops.length ? drops.map((d)=>`${D.ITEM_DEFS[d.id].name}×${d.qty}`).join('、') : 'なし';
-    const levelsText = levelUps.length ? `\n\n【レベルアップ】${levelUps.join('／')}\nパネルポイントを得た。` : '';
-    const story = first ? '\n\n虹全は倒れた敵を見下ろした。\n「次の命令を待つ必要はない。……俺たちは、俺たちで進む。」\n\n【物語パネル：「選択」が解放条件を満たしました】' : '';
-    showDialogue('戦闘勝利', `${defeated.map((e)=>e.name).join('、')}を倒した。\n経験値：${exp}　／　獲得金：${gold}G\n素材：${dropText}${levelsText}${story}`);
-  }
+  function buffValue(entity, stat) { return entity.status?.buffs?.[stat]?.value || 0; }
+  function combatStat(id,key) { const ch=getChar(id); let v=getStats(id)[key]; const b=buffValue(ch,key); if(b) v=Math.floor(v*(1+b*.14)); if(ch.status?.weaken&&(key==='atk'||key==='mag'))v=Math.floor(v*.72); return v; }
+  function effectiveDefenderDef(target,isEnemy=false) { let d=isEnemy?target.def:combatStat(target,'def'); if(target.status?.fracture)d=Math.max(0,Math.floor(d*.65)); return d; }
+  function enemyAttackValue(enemy) { let x=enemy.atk; if(enemy.status?.weaken)x=Math.floor(x*.72); return x; }
+  function setStatus(target,key,turns,value=1) { target.status ||= {}; if(key==='buffs'){target.status.buffs||={};return;} target.status[key]=Math.max(target.status[key]||0,turns); }
+  function addBuff(id,buffs,turns) { const ch=getChar(id);ch.status||={};ch.status.buffs||={};Object.entries(buffs||{}).forEach(([stat,value])=>{const old=ch.status.buffs[stat]||{value:0,turns:0};ch.status.buffs[stat]={value:Math.max(old.value,value),turns:Math.max(old.turns,turns)};}); }
+  function applyDebuffs(enemy,debuff,turnsBonus=0) { Object.entries(debuff||{}).forEach(([name,turns])=>setStatus(enemy,name,turns+turnsBonus)); }
+  function applyBarrier(id,ratio) { const ch=getChar(id);ch.barrier=Math.max(ch.barrier||0,Math.floor(getStats(id).maxHp*ratio)); }
+  function removeNegative(id) { const ch=getChar(id); if(ch.status){delete ch.status.fracture;delete ch.status.weaken;delete ch.status.slow;delete ch.status.bind;delete ch.status.silence;} }
+  function dealDamage(attackerId,target,multiplier=1,kind='physical',isEnemyTarget=true,bonusOnDebuff=0,extra={}) { const offensive=kind==='magic'||kind==='special'?combatStat(attackerId,'mag'):combatStat(attackerId,'atk');let power=multiplier; if(bonusOnDebuff&&Object.keys(target.status||{}).some(k=>k!=='buffs'))power+=bonusOnDebuff;if(hasPassive(attackerId,'debuff_damage')&&Object.keys(target.status||{}).some(k=>k!=='buffs'))power*=1.12;if(attackerId==='rainbow'&&getChar('rainbow').hp<=getStats('rainbow').maxHp*.5)power*=1.1;if(attackerId==='black'&&target.status?.fracture)power*=1.15;if(extra.pierce)target={...target,def:Math.floor(target.def*(1-extra.pierce))};if(extra.execute&&isEnemyTarget&&target.hp/target.maxHp<.32)power*=1.32;let damage=Math.max(1,Math.floor(offensive*power-effectiveDefenderDef(target,isEnemyTarget)*.52+rng(-3,4))); if(hasPassive(attackerId,'crit_up')&&Math.random()<.14)damage=Math.floor(damage*1.45);applyDamage(target,damage,isEnemyTarget);return damage; }
+  function applyDamage(target,damage,isEnemy){if(isEnemy){target.hp=Math.max(0,target.hp-damage);return;}let targetId=target;const ch=getChar(targetId);const protectedBy=ch.protectedBy;if(protectedBy&&protectedBy!==targetId&&getChar(protectedBy)?.hp>0){targetId=protectedBy;battleLog(`${getDef(protectedBy).short}が攻撃を受け止めた！`);}const defender=getChar(targetId);let final=damage;if(defender.barrier){const used=Math.min(defender.barrier,final);defender.barrier-=used;final-=used;if(defender.barrier<=0)delete defender.barrier;}if(defender.guard)final=Math.max(1,Math.floor(final*.5));if(protectedBy&&hasPassive(protectedBy,'guard_reduction'))final=Math.max(1,Math.floor(final*.85));if(final>=defender.hp&&defender.deathGuard){defender.hp=1;delete defender.deathGuard;battleLog(`${getDef(targetId).short}は結界に守られた！`);}else defender.hp=Math.max(0,defender.hp-final);}
+  function executeAttack(actorId,enemy){const dmg=dealDamage(actorId,enemy,1,'physical',true);audio.sfx('hit');battleLog(`${getDef(actorId).short}の攻撃！ ${enemy.name}に${dmg}ダメージ。`);resolveAfterHit();}
+  function executeSkill(actorId,skill,target){const actor=getChar(actorId);if(actor.mp<skill.mp)return; actor.mp-=skill.mp; const scale=masteryScale(actorId,skill);const dur=scale.durationBonus+(hasPassive(actorId,'duration_plus')?1:0);const power=(skill.power||0)*scale.potency;const heal=(skill.heal||0)*scale.potency;const barrier=(skill.barrier||0)*(1+(scale.level-1)*.07);const regen=(skill.regen||0)+(scale.level>=6?1:0);let targetEnemies=[];if(skill.target==='enemy'&&target)targetEnemies=[target];else if(skill.target==='allEnemies')targetEnemies=getAliveEnemies();if(skill.power&&!skill.allInOne){targetEnemies.forEach(e=>{const dmg=dealDamage(actorId,e,power,skill.kind,true,skill.bonusOnDebuff||0,{pierce:skill.pierce,execute:skill.execute});battleLog(`${getDef(actorId).short}の ${skill.name}！ ${e.name}に${dmg}ダメージ。`);});}
+    if(skill.allEnemyPower){getAliveEnemies().forEach(e=>{const dmg=dealDamage(actorId,e,skill.allEnemyPower*scale.potency,'magic',true);battleLog(`${skill.name}の余波！ ${e.name}に${dmg}ダメージ。`);});}
+    let allyTargets=skill.target==='allAllies'||skill.reviveAll?['rainbow','white','black']:(skill.target==='ally'?[target]:skill.target==='self'?[actorId]:[]); if(!allyTargets.length && (skill.heal||skill.barrier||skill.mpHeal||skill.allInOne)) allyTargets=['rainbow','white','black']; if(heal){allyTargets.filter(Boolean).forEach(id=>{const ch=getChar(id);if(ch.hp<=0&&(skill.revive||skill.reviveAll)){ch.hp=1;}if(ch.hp>0){let amount=Math.floor(getStats(id).maxHp*heal);if(skill.balanceHeal&&pct(ch.hp,getStats(id).maxHp)<.4)amount=Math.floor(amount*1.35);if(hasPassive(actorId,'heal_boost'))amount=Math.floor(amount*1.1);if(hasPassive(actorId,'low_ally_heal')&&pct(ch.hp,getStats(id).maxHp)<.5)amount=Math.floor(amount*1.15);ch.hp=clamp(ch.hp+amount,0,getStats(id).maxHp);if(hasPassive(actorId,'heal_regen'))ch.regen=Math.max(ch.regen||0,1);if(hasPassive(actorId,'heal_mp'))ch.mp=clamp(ch.mp+Math.floor(getStats(id).maxMp*.03),0,getStats(id).maxMp);}});}
+    if(skill.cleanse)allyTargets.filter(Boolean).forEach(id=>{removeNegative(id);if(hasPassive(actorId,'cleanse_barrier'))applyBarrier(id,.10);}); if(skill.mpHeal)allyTargets.filter(Boolean).forEach(id=>{const ch=getChar(id);ch.mp=clamp(ch.mp+Math.floor(getStats(id).maxMp*skill.mpHeal*scale.potency),0,getStats(id).maxMp);}); if(skill.regen)allyTargets.filter(Boolean).forEach(id=>{getChar(id).regen=Math.max(getChar(id).regen||0,regen);}); if(skill.barrier)allyTargets.filter(Boolean).forEach(id=>applyBarrier(id,barrier)); if(skill.deathGuard)allyTargets.filter(Boolean).forEach(id=>getChar(id).deathGuard=true); if(skill.buffs)allyTargets.filter(Boolean).forEach(id=>addBuff(id,skill.buffs,(skill.turns||2)+dur)); if(skill.guard&&target){getChar(target).protectedBy=actorId;getChar(target).protectedTurns=(skill.turns||2)+dur;} if(skill.debuff)targetEnemies.length?targetEnemies.forEach(e=>applyDebuffs(e,skill.debuff,dur)):getAliveEnemies().forEach(e=>applyDebuffs(e,skill.debuff,dur)); if(skill.dispel)getAliveEnemies().forEach(e=>{if(e.status) delete e.status.buffs;}); if(skill.stealBuff&&skill.buffs)addBuff(actorId,skill.buffs,(skill.turns||2)+dur); if(skill.lifeSteal&&targetEnemies.length){const hit=0;const recovered=Math.floor((skill.power||1)*combatStat(actorId,skill.kind==='physical'?'atk':'mag')*skill.lifeSteal*.55);actor.hp=clamp(actor.hp+recovered,0,getStats(actorId).maxHp);} if(skill.mpSteal)actor.mp=clamp(actor.mp+Math.floor(getStats(actorId).maxMp*skill.mpSteal),0,getStats(actorId).maxMp); if(skill.allInOne){getAliveEnemies().forEach(e=>{const dmg=dealDamage(actorId,e,power,'special',true);battleLog(`${skill.name}！ ${e.name}に${dmg}ダメージ。`);});['rainbow','white','black'].forEach(id=>{const ch=getChar(id);ch.hp=clamp(ch.hp+Math.floor(getStats(id).maxHp*heal),0,getStats(id).maxHp);});}
+    if(skill.kind==='physical'||skill.kind==='magic'||skill.kind==='special') { if(hasPassive(actorId,'fracture_chance')&&Math.random()<.2)targetEnemies.forEach(e=>setStatus(e,'fracture',1)); audio.sfx('hit'); } else audio.sfx('heal'); if(hasPassive(actorId,'skill_cycle')){actor.hp=clamp(actor.hp+Math.floor(getStats(actorId).maxHp*.02),0,getStats(actorId).maxHp);actor.mp=clamp(actor.mp+Math.floor(getStats(actorId).maxMp*.02),0,getStats(actorId).maxMp);} gainMastery(actorId,skill);battleLog(`${getDef(actorId).short}は ${skill.name} を使った。`);resolveAfterHit();}
+  function executeItem(actorId,itemId,targetId){const item=D.ITEM_DEFS[itemId];if(!takeItem(itemId,1))return;const target=getChar(targetId);if(item.effect.healHp)target.hp=clamp(target.hp+item.effect.healHp,0,getStats(targetId).maxHp);if(item.effect.healMp)target.mp=clamp(target.mp+item.effect.healMp,0,getStats(targetId).maxMp);audio.sfx('heal');battleLog(`${getDef(actorId).short}は ${item.name} を使った。`);resolveAfterHit();}
+  function resolveAfterHit(){if(getAliveEnemies().length===0)return finishBattle(true);afterPlayerAction();}
+  function afterPlayerAction(){const b=state.battle;b.selected=null;b.turnIndex+=1;while(b.turnIndex<b.order.length&&getChar(b.order[b.turnIndex]).hp<=0)b.turnIndex+=1;if(b.turnIndex>=b.order.length){b.phase='enemy';render();window.setTimeout(enemyPhase,b.auto?300:520);}else{b.phase='command';render();if(b.auto)window.setTimeout(runAutoTurn,260);}}
+  function enemyPhase(){const b=state.battle;if(!b)return;for(const enemy of getAliveEnemies()){const targets=getAliveAllies();if(!targets.length)return finishBattle(false);const targetId=choice(targets);const move=enemy.status?.silence?enemy.skills[0]:choice(enemy.skills);const base=Math.max(1,Math.floor(enemyAttackValue(enemy)*move.power-effectiveDefenderDef(targetId,false)*.45+rng(-2,4)));applyDamage(targetId,base,false);if(move.effect==='fracture'){getChar(targetId).status||={};getChar(targetId).status.fracture=2;}battleLog(`${enemy.name}の${move.name}！ ${getDef(targetId).short}に${base}ダメージ。`);if(!getAliveAllies().length)return finishBattle(false);}tickBattleStatuses();b.turnIndex=0;while(b.turnIndex<b.order.length&&getChar(b.order[b.turnIndex]).hp<=0)b.turnIndex+=1;b.phase='command';render();if(b.auto)window.setTimeout(runAutoTurn,260);}
+  function tickBattleStatuses(){state.battle.enemies.forEach(e=>{Object.keys(e.status||{}).forEach(k=>{if(k!=='buffs'){e.status[k]-=1;if(e.status[k]<=0)delete e.status[k];}});});['rainbow','white','black'].forEach(id=>{const ch=getChar(id);if(ch.guard)delete ch.guard;if(ch.regen){ch.hp=clamp(ch.hp+Math.floor(getStats(id).maxHp*.04),0,getStats(id).maxHp);ch.regen-=1;if(ch.regen<=0)delete ch.regen;}if(ch.status){Object.keys(ch.status).forEach(k=>{if(k==='buffs'){Object.keys(ch.status.buffs).forEach(stat=>{ch.status.buffs[stat].turns-=1;if(ch.status.buffs[stat].turns<=0)delete ch.status.buffs[stat];});}else{ch.status[k]-=1;if(ch.status[k]<=0)delete ch.status[k];}});}if(ch.protectedTurns){ch.protectedTurns-=1;if(ch.protectedTurns<=0){delete ch.protectedTurns;delete ch.protectedBy;}}});}
+  function finishBattle(victory){const b=state.battle;if(!b)return;const loc=D.LOCATIONS[b.locationId];if(!victory){state.gold=Math.max(0,state.gold-15);Object.keys(state.characters).forEach(id=>{const ch=getChar(id);ch.hp=Math.max(1,Math.floor(getStats(id).maxHp*.25));ch.mp=Math.max(0,Math.floor(getStats(id).maxMp*.25));});const fromAuto=!!b.autoExplore;state.battle=null;state.scene='location';if(fromAuto)return stopAutoExplore('敗北したため、オート探索を中止しました。');saveGame();render();showDialogue('撤退',`三人は ${loc.name} から撤退した。\n所持金を15G失い、傷ついた状態で戻ってきた。`);return;}const defeated=b.enemies;let exp=0,gold=0;const drops=[];defeated.forEach(enemy=>{exp+=enemy.exp;gold+=enemy.gold;state.kills[enemy.id]=(state.kills[enemy.id]||0)+1;enemy.drops.forEach(drop=>{if(Math.random()<=drop.chance){const qty=rng(drop.qty[0],drop.qty[1]);addItem(drop.id,qty);drops.push({id:drop.id,qty});}});});state.gold+=gold;const levelUps=[];['rainbow','white','black'].forEach(id=>{const levels=addCharacterExp(id,exp);if(levels.length)levelUps.push(`${getDef(id).short} Lv.${levels.join('・')}`);if(hasPassive(id,'kill_mp'))getChar(id).mp=clamp(getChar(id).mp+Math.floor(getStats(id).maxMp*.06),0,getStats(id).maxMp);if(hasPassive(id,'kill_hp'))getChar(id).hp=clamp(getChar(id).hp+Math.floor(getStats(id).maxHp*.05),0,getStats(id).maxHp);});const whiteLowest=getAliveAllies().sort((a,c)=>pct(getChar(a).hp,getStats(a).maxHp)-pct(getChar(c).hp,getStats(c).maxHp))[0];if(whiteLowest&&hasPassive('white','post_battle_heal'))getChar(whiteLowest).hp=clamp(getChar(whiteLowest).hp+Math.floor(getStats(whiteLowest).maxHp*.08),0,getStats(whiteLowest).maxHp);const first=!state.flags.firstVictory;if(first){state.flags.firstVictory=true;state.flags.choice=true;}const fromAuto=!!b.autoExplore;state.battle=null;state.scene='location';audio.sfx('victory');appendLog(`${defeated.map(e=>e.name).join('、')}を倒した。経験値${exp}／${gold}G`);const dropText=drops.length?drops.map(d=>`${D.ITEM_DEFS[d.id].name}×${d.qty}`).join('、'):'なし';if(fromAuto){autoResult(`戦闘勝利：${defeated.map(e=>e.name).join('・')}（${gold}G／${dropText}）`);saveGame();render();window.setTimeout(runAutoExploreStep,420);return;}saveGame();render();const levelsText=levelUps.length?`\n\n【レベルアップ】${levelUps.join('／')}\n各自3PTを獲得。`:'';const story=first?'\n\n戦いが終わり、草原に風が戻った。\n黒零「次は、どうする？」\n白零「虹全が決める？」\n虹全「……いや。三人で決めよう。もう、誰かの指示を待たなくていい。」\n\n【物語パネル：「選択」が解放条件を満たしました】':'';showDialogue('戦闘勝利',`${defeated.map(e=>e.name).join('、')}を倒した。\n経験値：${exp}　／　獲得金：${gold}G\n素材：${dropText}${levelsText}${story}`);}
 
   function useItemOutside(itemId) {
     const item = D.ITEM_DEFS[itemId];
@@ -905,7 +747,11 @@
   }
 
   function showInn() {
-    showModal(`<div class="modal-header"><div><h2>宿屋《風見鶏》</h2><p>20Gで三人のHPとMPを全回復します。</p></div><button class="modal-close" data-action="modal-close">×</button></div><div class="card"><p>白零「休息は、次の行動効率を上げるために必要です。」</p><div class="modal-footer"><button class="secondary-button" data-action="modal-close">戻る</button><button class="primary-button" data-action="rest" ${state.gold<20?'disabled':''}>20Gで泊まる</button></div></div>`);
+    showModal(`<div class="modal-header"><div><h2>宿屋《風見鶏》</h2><p>20Gで三人のHPとMPを全回復します。</p></div><button class="modal-close" data-action="modal-close">×</button></div><div class="card"><p class="dialogue-text">白零「今日は、休みましょう。明日も歩くために。」
+
+虹全「賛成。温かいものも食べたい。」
+
+黒零「……眠れるなら、それでいい。」</p><div class="modal-footer"><button class="secondary-button" data-action="modal-close">戻る</button><button class="primary-button" data-action="rest" ${state.gold<20?'disabled':''}>20Gで泊まる</button></div></div>`);
   }
 
   function showSell() {
@@ -914,13 +760,27 @@
   }
 
   function showCharacterDetails(id) {
-    const def=getDef(id); const ch=getChar(id); const stats=getStats(id); const equip=state.equipment[id]?D.EQUIPMENT_DEFS[state.equipment[id]]:null;
-    showModal(`<div class="modal-header"><div><h2>${def.name}</h2><p>${def.subtitle}</p></div><button class="modal-close" data-action="modal-close">×</button></div><canvas class="portrait-large" style="width:150px;height:200px;display:block;margin:8px auto 14px;" data-portrait="${id}" width="112" height="156"></canvas><p class="dialogue-text">${def.intro}</p><div class="stat-grid">${[['最大HP',stats.maxHp],['最大MP',stats.maxMp],['攻撃',stats.atk],['防御',stats.def],['魔力',stats.mag],['敏捷',stats.agi],['幸運',stats.luck]].map(([n,v])=>`<div class="stat-box"><span>${n}</span><strong>${v}</strong></div>`).join('')}</div><div class="trait-box"><b>種族特性：${def.trait.name}</b><br>${def.trait.description}</div><p>習得技：${currentSkills(id).map((s)=>`${s.name}（MP ${s.mp}）`).join('、')}<br>装備：${equip?`${equip.name} — ${equip.description}`:'なし'}</p>`);
-    window.requestAnimationFrame(drawVisibleCanvases);
+    const def=getDef(id),ch=getChar(id),stats=getStats(id),equip=state.equipment[id]?D.EQUIPMENT_DEFS[state.equipment[id]]:null;const traits=(def.traits||[]).map(t=>`<div class="trait-box"><b>${t.name}</b><br>${t.description}</div>`).join('');const skills=currentSkills(id);
+    showModal(`<div class="modal-header"><div><h2>${def.name}</h2><p>${def.subtitle}</p></div><button class="modal-close" data-action="modal-close">×</button></div><canvas class="portrait-large" style="width:150px;height:200px;display:block;margin:8px auto 14px;" data-portrait="${id}" width="112" height="156"></canvas><p class="dialogue-text">${def.intro}</p><div class="trait-box"><b>現在の旅の立ち位置</b><br>${id==='rainbow'?'二人の間に立ち、答えを急がずに進む。':id==='white'?'守る理由を、少しずつ自分の言葉で探している。':'終わらせる力の先に、残したいものを探している。'}<br><span class="note">遠い未来：${def.teriosName}</span></div><div class="stat-grid">${[['最大HP',stats.maxHp],['最大MP',stats.maxMp],['攻撃',stats.atk],['防御',stats.def],['魔力',stats.mag],['敏捷',stats.agi],['幸運',stats.luck]].map(([n,v])=>`<div class="stat-box"><span>${n}</span><strong>${v}</strong></div>`).join('')}</div><h3>種族特性</h3>${traits}<h3>習得技と習熟度</h3><div class="list">${skills.map(sk=>`<div class="list-row"><span class="badge">Lv.${skillMasteryLevel(id,sk.id)}</span><div class="row-main"><strong>${sk.name}</strong><div class="meta">${sk.description}</div><div class="meta">${skillMasteryLabel(id,sk.id)}</div></div></div>`).join('')}</div><p>装備：${equip?`${equip.name} — ${equip.description}`:'なし'}</p>`);window.requestAnimationFrame(drawVisibleCanvases);
+  }
+
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, (ch) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[ch]));
+  }
+
+  function renderDialogueText(text) {
+    const lines = String(text).split('\n').filter((line) => line.trim());
+    return `<div class="dialogue-lines">${lines.map((line) => {
+      const match = line.match(/^(虹全|白零|黒零|治療師|受付|ギルド係)「(.+)」$/);
+      if (!match) return `<div class="dialogue-line narration">${escapeHtml(line)}</div>`;
+      const short = match[1];
+      const klass = short === '虹全' ? 'kouzen' : short === '白零' ? 'hakurei' : short === '黒零' ? 'kokurei' : 'narration';
+      return `<div class="dialogue-line ${klass}"><span class="speaker">${escapeHtml(short)}</span>${escapeHtml(match[2])}</div>`;
+    }).join('')}</div>`;
   }
 
   function showDialogue(title, text) {
-    showModal(`<div class="modal-header"><div><h2>${title}</h2></div><button class="modal-close" data-action="modal-close">×</button></div><div class="divider"></div><div class="dialogue-speaker">全零〈オムニル〉</div><p class="dialogue-text">${text}</p><div class="modal-footer"><button class="primary-button" data-action="modal-close">閉じる</button></div>`);
+    showModal(`<div class="modal-header"><div><h2>${title}</h2><div class="dialogue-scene">STORY LOG</div></div><button class="modal-close" data-action="modal-close">×</button></div><div class="divider"></div><div class="dialogue-speaker">全零〈オムニル〉</div>${renderDialogueText(text)}<div class="modal-footer"><button class="primary-button" data-action="modal-close">閉じる</button></div>`);
   }
 
   function showModal(html, onClose = null) {
@@ -940,7 +800,8 @@
   }
 
   function showSystemMenu() {
-    showModal(`<div class="modal-header"><div><h2>メニュー</h2><p>この試作版はブラウザの保存領域に自動セーブします。</p></div><button class="modal-close" data-action="modal-close">×</button></div><div class="list"><button class="list-row" data-action="save"><span class="badge">保存</span><span class="row-main"><strong>今すぐセーブ</strong><span class="meta">現在の進行をブラウザに保存する。</span></span></button><button class="list-row" data-action="reset-confirm"><span class="badge locked">初期化</span><span class="row-main"><strong>最初からやり直す</strong><span class="meta">セーブデータを初期状態に戻す。</span></span></button></div>`);
+    const audioState = state.audio.music ? 'オン' : 'オフ';
+    showModal(`<div class="modal-header"><div><h2>メニュー</h2><p>この試作版はブラウザの保存領域に自動セーブします。</p></div><button class="modal-close" data-action="modal-close">×</button></div><div class="list"><button class="list-row" data-action="toggle-audio"><span class="badge">音楽</span><span class="row-main"><strong>BGM：${audioState}</strong><span class="meta">場所・戦闘に応じたチップ・アンビエントBGMを切り替える。</span></span></button><button class="list-row" data-action="save"><span class="badge">保存</span><span class="row-main"><strong>今すぐセーブ</strong><span class="meta">現在の進行・パネル・習熟度をブラウザに保存する。</span></span></button><button class="list-row" data-action="reset-confirm"><span class="badge locked">初期化</span><span class="row-main"><strong>最初からやり直す</strong><span class="meta">セーブデータを初期状態に戻す。</span></span></button></div><div class="audio-note">スマホでは、最初のタップ後に音が鳴ります。音楽は外部素材を使わないゲーム内生成音です。</div>`);
   }
 
   function confirmReset() {
@@ -1038,11 +899,15 @@
     const target = event.target.closest('[data-action]');
     if (!target || target.disabled) return;
     const a = target.dataset.action; const id=target.dataset.id;
+    audio.resume();
+    if (a !== 'modal-close') audio.sfx('tap');
     if (a === 'start') startGame();
     else if (a === 'go-world') { state.scene='world'; saveGame(); render(); }
     else if (a === 'go-party') { state.scene='party'; render(); }
     else if (a === 'enter-location') enterLocation(id);
     else if (a === 'explore') explore(id);
+    else if (a === 'auto-explore') startAutoExplore(id);
+    else if (a === 'cancel-auto-explore') stopAutoExplore();
     else if (a === 'facility') openFacility(id);
     else if (a === 'open-panel') { state.selectedCharacter=id; state.scene='panel'; render(); }
     else if (a === 'open-character') { state.selectedCharacter=id; state.scene='party'; render(); }
@@ -1061,19 +926,23 @@
     else if (a === 'battle-item') useBattleItem(id);
     else if (a === 'battle-target-enemy') targetEnemy(target.dataset.index);
     else if (a === 'battle-target-ally') targetAlly(id);
-    else if (a === 'battle-back') { if(state.battle){state.battle.phase='command';state.battle.selected=null;render();} }
+    else if (a === 'battle-back') { if(state.battle&&!state.battle.auto){state.battle.phase='command';state.battle.selected=null;render();} }
+    else if (a === 'toggle-battle-auto') toggleBattleAuto();
     else if (a === 'modal-close') closeModal();
+    else if (a === 'toggle-audio') { toggleAudio(); showSystemMenu(); }
     else if (a === 'save') { saveGame(true); closeModal(); }
     else if (a === 'reset-confirm') confirmReset();
     else if (a === 'reset') resetGame();
   });
 
   document.querySelectorAll('[data-nav]').forEach((button) => button.addEventListener('click', () => {
+    audio.resume(); audio.sfx('tap');
     const page=button.dataset.nav; state.scene=page; render();
   }));
-  document.getElementById('saveButton').addEventListener('click', ()=>saveGame(true));
-  document.getElementById('menuButton').addEventListener('click', showSystemMenu);
-  document.getElementById('homeButton').addEventListener('click', ()=>{state.scene='title';render();});
+  document.getElementById('audioButton').addEventListener('click', toggleAudio);
+  document.getElementById('saveButton').addEventListener('click', ()=>{ audio.resume(); audio.sfx('tap'); saveGame(true); });
+  document.getElementById('menuButton').addEventListener('click', ()=>{ audio.resume(); audio.sfx('tap'); showSystemMenu(); });
+  document.getElementById('homeButton').addEventListener('click', ()=>{audio.resume(); audio.sfx('tap'); state.scene='title';render();});
   modalLayer.addEventListener('click', (event) => { if(event.target === modalLayer) closeModal(); });
 
   render();
