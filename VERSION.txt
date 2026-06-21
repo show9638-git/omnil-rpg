@@ -1,0 +1,10 @@
+全零〈オムニル〉— 星なき始まり — weekday test v0.6
+Build date: 2026-06-22
+
+GitHubへは、このフォルダの中身をリポジトリ直下へ上書きアップロードしてください。
+最低限必要な実行ファイル：
+- index.html
+- style.css
+- js/data.js
+- js/audio.js
+- js/game.js

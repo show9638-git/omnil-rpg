@@ -1,4 +1,4 @@
-/* 全零〈オムニル〉 v0.5 data — 地方地図・探索難易度・冒険者レベル */
+/* 全零〈オムニル〉 v0.6 data — 地方地図・探索難易度・冒険者レベル */
 window.OMNIL_DATA = (() => {
   // 冒険者レベルはパーティ全体の進行度。スタミナ上限・施設品・行動範囲に影響する。
   const RANKS = [
@@ -382,5 +382,136 @@ window.OMNIL_DATA = (() => {
     black_ring:{id:'black_ring',name:'侵食の指輪',description:'黒零の魔力+3、敏捷+1。作成時に自動装備する。',ingredients:[{id:'old_fragment',qty:2},{id:'slime_core',qty:2}],output:{type:'equipment',id:'black_ring',qty:1}},
   };
 
-  return { RANKS, ITEM_DEFS, EQUIPMENT_DEFS, CHARACTER_DEFS, SKILLS, PASSIVES, ENEMIES, LOCATIONS, EXPLORATION_DIFFICULTIES, QUESTS, RECIPES };
+
+  // v0.6：平日テスト版の大規模コンテンツ追加。数値・名称は今後の本制作で再調整できるデータ駆動形式。
+  Object.assign(ITEM_DEFS, {
+    moonleaf: { id:'moonleaf', name:'月露草', type:'material', description:'夜の草原でだけ淡く光る薬草。上位回復薬の素材。', sell:26 },
+    beast_hide: { id:'beast_hide', name:'獣皮', type:'material', description:'なめすと丈夫な防具素材になる。', sell:24 },
+    iron_ore: { id:'iron_ore', name:'風鉄鉱', type:'material', description:'風の通り道で採れる軽い鉄鉱石。', sell:31 },
+    amber_resin: { id:'amber_resin', name:'琥珀樹脂', type:'material', description:'森の古木から採れる魔力を帯びた樹脂。', sell:36 },
+    silver_feather: { id:'silver_feather', name:'銀羽', type:'material', description:'希少な鳥獣の羽。装飾品の触媒になる。', sell:58 },
+    crystal_shard: { id:'crystal_shard', name:'星彩の欠晶', type:'material', description:'遺構の魔力を閉じ込めた小さな結晶。', sell:52 },
+    ruin_circuit: { id:'ruin_circuit', name:'遺構回路', type:'material', description:'番兵の内部から回収した、まだ脈打つ回路。', sell:74 },
+    star_sand: { id:'star_sand', name:'星砂', type:'material', description:'落星の周囲に残る、淡く熱を持つ砂。', sell:66 },
+    obsidian_piece: { id:'obsidian_piece', name:'黒曜片', type:'material', description:'終焉の気配を帯びた黒い石片。', sell:81 },
+    frost_bloom: { id:'frost_bloom', name:'霜花', type:'material', description:'冷気の洞窟に咲く、溶けない花。', sell:92 },
+    ancient_coin: { id:'ancient_coin', name:'古代硬貨', type:'material', description:'誰の肖像か分からない、遺構の硬貨。', sell:120 },
+    rainbow_crystal: { id:'rainbow_crystal', name:'虹晶核', type:'material', description:'白・黒・虹の力に強く反応する希少結晶。', sell:210 },
+    metal_core: { id:'metal_core', name:'金属粘体の核', type:'material', description:'金属系魔物の硬い核。換金価値が高い。', sell:180 },
+    gold_dust: { id:'gold_dust', name:'黄金粉', type:'material', description:'金色の魔物が残す高純度の粉。', sell:260 },
+    boss_emblem: { id:'boss_emblem', name:'覇者の刻印', type:'material', description:'地方の主級魔物が残す証。強力な製造素材。', sell:420 },
+    secret_relic: { id:'secret_relic', name:'封じられた遺物', type:'material', description:'隠し地点からだけ見つかる、正体不明の遺物。', sell:520 },
+    high_potion: { id:'high_potion', name:'上質な癒しの小瓶', type:'consumable', description:'仲間1人のHPを120回復する。', sell:46, buy:118, minLevel:2, effect:{healHp:120} },
+    mega_potion: { id:'mega_potion', name:'大癒しの小瓶', type:'consumable', description:'仲間1人のHPを220回復する。', sell:94, buy:245, minLevel:4, effect:{healHp:220} },
+    high_ether: { id:'high_ether', name:'澄明の大瓶', type:'consumable', description:'仲間1人のMPを42回復する。', sell:74, buy:160, minLevel:3, effect:{healMp:42} },
+    elixir: { id:'elixir', name:'星読みの霊薬', type:'consumable', description:'仲間1人のHPを120、MPを38回復する。', sell:130, buy:320, minLevel:5, effect:{healHp:120,healMp:38} },
+    stamina_draught: { id:'stamina_draught', name:'活力の大瓶', type:'consumable', description:'パーティのスタミナを60回復する。上限超過可。', sell:50, buy:135, minLevel:2, effect:{restoreStamina:60,allowOvercap:true} },
+    stamina_elixir: { id:'stamina_elixir', name:'虹晶活力剤', type:'consumable', description:'パーティのスタミナを150回復する。上限超過可。', sell:140, buy:380, minLevel:4, effect:{restoreStamina:150,allowOvercap:true} },
+    phoenix_leaf: { id:'phoenix_leaf', name:'再起の葉', type:'consumable', description:'戦闘不能の仲間をHP35%で復帰させる。', sell:88, buy:210, minLevel:3, effect:{reviveHpRate:.35} },
+  });
+
+  // 既存品にも冒険者Lvによる店頭解放を設定する。
+  ITEM_DEFS.ether.minLevel = 2;
+  ITEM_DEFS.stamina_tonic.minLevel = 1;
+  ITEM_DEFS.antidote.minLevel = 1;
+
+  Object.assign(EQUIPMENT_DEFS, {
+    rainbow_guard: { id:'rainbow_guard', name:'三彩の守環', target:'rainbow', slot:'charm', description:'虹全の防御+5、最大MP+10。', stats:{def:5,maxMp:10}, minLevel:2 },
+    rainbow_mantle: { id:'rainbow_mantle', name:'均衡の外套', target:'rainbow', slot:'armor', description:'虹全の最大HP+26、敏捷+3。', stats:{maxHp:26,agi:3}, minLevel:3 },
+    rainbow_coreblade: { id:'rainbow_coreblade', name:'原初の片刃', target:'rainbow', slot:'weapon', description:'虹全の攻撃+10、魔力+8。', stats:{atk:10,mag:8}, minLevel:5 },
+    white_staff: { id:'white_staff', name:'芽吹きの杖', target:'white', slot:'weapon', description:'白零の魔力+7、最大MP+12。', stats:{mag:7,maxMp:12}, minLevel:2 },
+    white_cloak: { id:'white_cloak', name:'新雪の法衣', target:'white', slot:'armor', description:'白零の防御+6、最大HP+20。', stats:{def:6,maxHp:20}, minLevel:3 },
+    white_sigil: { id:'white_sigil', name:'始まりの印章', target:'white', slot:'charm', description:'白零の魔力+11、幸運+4。', stats:{mag:11,luck:4}, minLevel:5 },
+    black_blade: { id:'black_blade', name:'黒夜の短刀', target:'black', slot:'weapon', description:'黒零の攻撃+7、敏捷+3。', stats:{atk:7,agi:3}, minLevel:2 },
+    black_coat: { id:'black_coat', name:'断絶の外衣', target:'black', slot:'armor', description:'黒零の最大HP+22、防御+4。', stats:{maxHp:22,def:4}, minLevel:3 },
+    black_orb: { id:'black_orb', name:'終端の魔珠', target:'black', slot:'charm', description:'黒零の魔力+12、攻撃+6。', stats:{mag:12,atk:6}, minLevel:5 },
+  });
+
+  Object.assign(ENEMIES, {
+    bloom_wisp:{id:'bloom_wisp',name:'花灯りウィスプ',level:2,maxHp:74,atk:13,def:5,mag:13,agi:15,exp:34,gold:25,sprite:'slime',drops:[{id:'moonleaf',chance:.75,qty:[1,2]},{id:'slime_core',chance:.55,qty:[1,2]}],skills:[{name:'花火',power:1.12},{name:'眩惑',power:.72,effect:'fracture'}]},
+    iron_boar:{id:'iron_boar',name:'鉄背ボア',level:3,maxHp:156,atk:20,def:18,mag:5,agi:6,exp:58,gold:42,sprite:'wolf',drops:[{id:'beast_hide',chance:.9,qty:[1,2]},{id:'iron_ore',chance:.65,qty:[1,2]}],skills:[{name:'突進',power:1.3},{name:'鉄皮',power:.85}]},
+    silver_hare:{id:'silver_hare',name:'銀跳ねラビット',level:3,maxHp:82,atk:18,def:7,mag:9,agi:24,exp:72,gold:86,rare:true,sprite:'hare',drops:[{id:'silver_feather',chance:1,qty:[1,2]},{id:'moonleaf',chance:.75,qty:[1,2]}],skills:[{name:'月跳び',power:1.28}]},
+    thorn_mantis:{id:'thorn_mantis',name:'棘鎌マンティス',level:4,maxHp:185,atk:28,def:13,mag:11,agi:18,exp:83,gold:61,sprite:'wolf',drops:[{id:'beast_hide',chance:.8,qty:[1,2]},{id:'amber_resin',chance:.44,qty:[1,1]}],skills:[{name:'棘鎌',power:1.38},{name:'裂傷',power:.94,effect:'fracture'}]},
+    moss_titan:{id:'moss_titan',name:'苔岩の巨像',level:6,maxHp:510,atk:31,def:24,mag:18,agi:5,exp:235,gold:180,boss:true,sprite:'bosswolf',drops:[{id:'bark',chance:1,qty:[3,5]},{id:'boss_emblem',chance:1,qty:[1,1]},{id:'amber_resin',chance:1,qty:[2,3]}],skills:[{name:'巨腕',power:1.48},{name:'地響き',power:1.05,effect:'fracture'}]},
+    ruin_wisp:{id:'ruin_wisp',name:'遺構の燐火',level:4,maxHp:142,atk:15,def:9,mag:26,agi:16,exp:91,gold:72,sprite:'slime',drops:[{id:'crystal_shard',chance:.78,qty:[1,2]},{id:'prism_dust',chance:.45,qty:[1,2]}],skills:[{name:'蒼い火',power:1.42},{name:'鈍化光',power:.84,effect:'fracture'}]},
+    hollow_knight:{id:'hollow_knight',name:'空洞の騎士',level:5,maxHp:260,atk:29,def:19,mag:16,agi:12,exp:118,gold:94,sprite:'sentinel',drops:[{id:'old_fragment',chance:.75,qty:[1,2]},{id:'ruin_circuit',chance:.65,qty:[1,1]}],skills:[{name:'空刃',power:1.40},{name:'盾砕き',power:1.04,effect:'fracture'}]},
+    ancient_golem:{id:'ancient_golem',name:'古代石巨人',level:7,maxHp:720,atk:38,def:32,mag:22,agi:4,exp:315,gold:260,boss:true,sprite:'sentinel',drops:[{id:'ruin_circuit',chance:1,qty:[2,3]},{id:'boss_emblem',chance:1,qty:[1,1]},{id:'ancient_coin',chance:1,qty:[2,3]}],skills:[{name:'崩拳',power:1.58},{name:'重圧波',power:1.15,effect:'fracture'}]},
+    glass_drake:{id:'glass_drake',name:'硝子翼ドレイク',level:7,maxHp:390,atk:40,def:22,mag:30,agi:20,exp:240,gold:210,sprite:'bosswolf',drops:[{id:'crystal_shard',chance:1,qty:[2,3]},{id:'rainbow_crystal',chance:.18,qty:[1,1]}],skills:[{name:'晶翼',power:1.55},{name:'虹熱線',power:1.28,effect:'fracture'}]},
+    starfall_beast:{id:'starfall_beast',name:'落星の獣',level:9,maxHp:980,atk:52,def:31,mag:44,agi:18,exp:480,gold:420,boss:true,sprite:'bosswolf',drops:[{id:'star_sand',chance:1,qty:[3,5]},{id:'rainbow_crystal',chance:1,qty:[1,2]},{id:'boss_emblem',chance:1,qty:[1,1]}],skills:[{name:'星砕き',power:1.78},{name:'流星咆哮',power:1.32,effect:'fracture'}]},
+    fog_wraith:{id:'fog_wraith',name:'霧の亡霊',level:6,maxHp:275,atk:23,def:14,mag:36,agi:23,exp:158,gold:136,sprite:'slime',drops:[{id:'obsidian_piece',chance:.6,qty:[1,2]},{id:'star_sand',chance:.35,qty:[1,1]}],skills:[{name:'冷たい手',power:1.36},{name:'虚ろな声',power:.82,effect:'fracture'}]},
+    frost_lupus:{id:'frost_lupus',name:'霜牙ルプス',level:8,maxHp:445,atk:47,def:24,mag:22,agi:25,exp:290,gold:248,sprite:'wolf',drops:[{id:'frost_bloom',chance:.75,qty:[1,2]},{id:'beast_hide',chance:.8,qty:[2,3]}],skills:[{name:'凍牙',power:1.62},{name:'氷息',power:1.20,effect:'fracture'}]},
+    metal_slime:{id:'metal_slime',name:'メタルスライム',level:5,maxHp:18,atk:25,def:58,mag:18,agi:48,exp:480,gold:18,rare:true,metal:true,sprite:'slime',drops:[{id:'metal_core',chance:1,qty:[1,1]},{id:'slime_core',chance:1,qty:[2,3]}],skills:[{name:'逃走体当たり',power:1.14}]},
+    gold_puff:{id:'gold_puff',name:'ゴールドパフ',level:5,maxHp:86,atk:18,def:12,mag:22,agi:30,exp:105,gold:680,rare:true,golden:true,sprite:'slime',drops:[{id:'gold_dust',chance:1,qty:[1,3]},{id:'ancient_coin',chance:.42,qty:[1,2]}],skills:[{name:'黄金散布',power:1.06}]},
+    prism_mimic:{id:'prism_mimic',name:'虹晶ミミック',level:8,maxHp:520,atk:48,def:29,mag:38,agi:14,exp:360,gold:330,rare:true,sprite:'sentinel',drops:[{id:'rainbow_crystal',chance:1,qty:[1,2]},{id:'secret_relic',chance:.28,qty:[1,1]}],skills:[{name:'擬態咬み',power:1.55},{name:'虹晶破裂',power:1.25,effect:'fracture'}]},
+  });
+
+  Object.assign(LOCATIONS, {
+    brook_meadows:{id:'brook_meadows',name:'水鏡の牧草地',type:'field',region:'lindholm',x:31,y:43,rank:'1',description:'小川と牧草が広がる穏やかな採取地。月露草が見つかることがある。',enemyPool:['grass_hare','bloom_wisp','wind_wolf'],materialPool:['herb','moonleaf','slime_core'],rareMaterialPool:['moonleaf','silver_feather'],rareEnemyPool:['silver_hare','gold_puff'],hiddenFinds:['moonleaf','ancient_coin']},
+    iron_hills:{id:'iron_hills',name:'風鉄の丘',type:'field',region:'lindholm',x:48,y:74,rank:'2',description:'風鉄鉱が露出する岩丘。獣と鉱脈を巡る争いが多い。',enemyPool:['iron_boar','wind_wolf','thorn_mantis'],materialPool:['iron_ore','beast_hide','wolf_fang'],rareMaterialPool:['iron_ore','amber_resin'],rareEnemyPool:['metal_slime','gold_puff'],hiddenFinds:['iron_ore','secret_relic']},
+    moss_depths:{id:'moss_depths',name:'苔深き森',type:'field',region:'lindholm',x:68,y:51,rank:'2',description:'囁きの森のさらに奥。樹脂や獣皮が手に入るが、主級魔物も潜む。',enemyPool:['whisper_treant','thorn_mantis','iron_boar'],materialPool:['bark','amber_resin','beast_hide'],rareMaterialPool:['amber_resin','silver_feather'],rareEnemyPool:['metal_slime','gold_puff'],bossPool:['moss_titan'],hiddenFinds:['amber_resin','secret_relic']},
+    moonfog_marsh:{id:'moonfog_marsh',name:'月霧の湿原',type:'field',region:'lindholm',x:54,y:29,rank:'3',description:'夜になると月の光を吸う霧が立つ湿原。幽体と希少薬草が現れる。',enemyPool:['fog_wraith','bloom_wisp','thorn_mantis'],materialPool:['moonleaf','amber_resin','obsidian_piece'],rareMaterialPool:['silver_feather','star_sand'],rareEnemyPool:['metal_slime','gold_puff'],hiddenFinds:['secret_relic','ancient_coin']},
+    crystal_cavern:{id:'crystal_cavern',name:'星彩の結晶洞',type:'field',region:'lindholm',x:87,y:50,rank:'3',description:'虹色の結晶が壁を覆う洞窟。高純度の結晶素材を採取できる。',enemyPool:['ruin_wisp','hollow_knight','glass_drake'],materialPool:['crystal_shard','prism_dust','old_fragment'],rareMaterialPool:['rainbow_crystal','ruin_circuit'],rareEnemyPool:['metal_slime','prism_mimic'],hiddenFinds:['rainbow_crystal','secret_relic']},
+    starfall_ridge:{id:'starfall_ridge',name:'落星の尾根',type:'field',region:'lindholm',x:84,y:17,rank:'4',description:'星が落ちたと伝わる高地。危険な魔力の嵐が吹く。',enemyPool:['glass_drake','ancient_golem','fog_wraith'],materialPool:['star_sand','rainbow_crystal','ancient_coin'],rareMaterialPool:['rainbow_crystal','boss_emblem'],rareEnemyPool:['metal_slime','prism_mimic'],bossPool:['starfall_beast'],hiddenFinds:['secret_relic','rainbow_crystal']},
+    frost_gate:{id:'frost_gate',name:'白霜の関所',type:'town',region:'northreach',x:62,y:18,rank:'4',description:'北の雪原へ向かう最後の補給地。Lv.4から利用できる第二拠点。',facilities:['guild','shop','craft','inn','sell']},
+    frost_wastes:{id:'frost_wastes',name:'白霜の雪原',type:'field',region:'northreach',x:47,y:38,rank:'4',description:'冷気が肌を刺す北方の雪原。霜花と危険な獣が待つ。',enemyPool:['frost_lupus','fog_wraith','iron_boar'],materialPool:['frost_bloom','beast_hide','obsidian_piece'],rareMaterialPool:['frost_bloom','ancient_coin'],rareEnemyPool:['metal_slime','gold_puff'],hiddenFinds:['secret_relic','frost_bloom']},
+    north_observatory:{id:'north_observatory',name:'北天観測所',type:'field',region:'northreach',x:73,y:53,rank:'5',description:'崩れた観測施設。星を読む者の記録と古代機構が残っている。',enemyPool:['ancient_golem','prism_mimic','hollow_knight'],materialPool:['ruin_circuit','ancient_coin','rainbow_crystal'],rareMaterialPool:['secret_relic','rainbow_crystal'],rareEnemyPool:['metal_slime','prism_mimic'],bossPool:['ancient_golem'],hiddenFinds:['secret_relic','ancient_coin']},
+  });
+  Object.values(LOCATIONS).forEach((loc) => { if (!loc.region) loc.region='lindholm'; });
+
+  const REGIONS = {
+    lindholm:{id:'lindholm',name:'リンドホルム地方',unlockRank:'1',description:'草原、深林、遺構、落星の尾根が連なる最初の地方。',theme:'plain',label:'第一章：星なき始まり'},
+    northreach:{id:'northreach',name:'白霜北域',unlockRank:'4',description:'白霜の関所の先に広がる北方地方。冷気と観測遺構が残る。',theme:'frost',label:'第二章：凍てる空の記録'},
+    embercoast:{id:'embercoast',name:'緋火海岸',unlockRank:'7',description:'溶岩洞と海蝕遺跡が並ぶ南西の海岸地方。',theme:'coast',label:'第三章：燃える海の境界'},
+    duskvale:{id:'duskvale',name:'暮影峡谷',unlockRank:'10',description:'始まりと終わりの剣にまつわる伝承が残る峡谷。',theme:'dusk',label:'第四章：二振りの剣'},
+  };
+
+  const extraQuest = (id,name,rank,description,type,target,amount,gold,advExp,unlockAt,repeatable=false,items=[]) => ({id,name,rank:String(rank),description,type,target,amount,reward:{gold,advExp,items},unlockAt,repeatable,dialogue:repeatable?'地方ギルドの常設依頼。':'地方を歩く人々から届いた依頼。'});
+  Object.assign(QUESTS, {
+    q_moonleaf:extraQuest('q_moonleaf','月露草を探して',1,'水鏡の牧草地で月露草を3つ集める。','collect','moonleaf',3,118,34,15,false,[{id:'stamina_tonic',qty:1}]),
+    q_boar:extraQuest('q_boar','鉄背ボアの追い払い',2,'風鉄の丘の鉄背ボアを3体討伐する。','kill','iron_boar',3,230,65,100,false,[{id:'high_potion',qty:1}]),
+    q_ore:extraQuest('q_ore','風鉄鉱の納品',2,'風鉄鉱を5つ鍛冶師へ納品する。','collect','iron_ore',5,260,70,120,false,[{id:'ether',qty:2}]),
+    q_mantis:extraQuest('q_mantis','棘鎌の伐採許可',2,'苔深き森の棘鎌マンティスを3体退ける。','kill','thorn_mantis',3,280,78,145,false,[{id:'stamina_draught',qty:1}]),
+    q_titan:extraQuest('q_titan','苔岩の主',3,'苔岩の巨像を討伐し、森の通路を取り戻す。','kill','moss_titan',1,640,165,260,false,[{id:'boss_emblem',qty:1},{id:'stamina_draught',qty:2}]),
+    q_wraith:extraQuest('q_wraith','月霧の行方不明者',3,'月霧の湿原の霧の亡霊を4体討伐する。','kill','fog_wraith',4,430,112,300,false,[{id:'high_ether',qty:1}]),
+    q_crystal:extraQuest('q_crystal','星彩の結晶標本',3,'星彩の欠晶を5つ回収する。','collect','crystal_shard',5,470,124,320,false,[{id:'stamina_draught',qty:1}]),
+    q_drake:extraQuest('q_drake','硝子翼の脅威',3,'硝子翼ドレイクを2体討伐する。','kill','glass_drake',2,520,145,380,false,[{id:'high_potion',qty:2}]),
+    q_ridge:extraQuest('q_ridge','尾根の落星調査',4,'星砂を4つ集め、調査団へ届ける。','collect','star_sand',4,690,180,520,false,[{id:'stamina_elixir',qty:1}]),
+    q_starfall:extraQuest('q_starfall','落星の獣',4,'落星の獣を討伐する。','kill','starfall_beast',1,1280,310,700,false,[{id:'rainbow_crystal',qty:1},{id:'stamina_elixir',qty:2}]),
+    q_frost_bloom:extraQuest('q_frost_bloom','白霜の花束',4,'白霜の雪原で霜花を4つ集める。','collect','frost_bloom',4,720,190,560,false,[{id:'mega_potion',qty:1}]),
+    q_observatory:extraQuest('q_observatory','北天の記録片',5,'北天観測所で遺構回路を4つ回収する。','collect','ruin_circuit',4,980,240,900,false,[{id:'elixir',qty:1}]),
+    q_secret:extraQuest('q_secret','封じられた遺物',5,'封じられた遺物を1つギルドへ持ち帰る。','collect','secret_relic',1,1500,340,1000,false,[{id:'rainbow_crystal',qty:2}]),
+    r_moonleaf:extraQuest('r_moonleaf','【繰返】月露草の採取',1,'月露草を2つ納品する。','collect','moonleaf',2,56,13,25,true),
+    r_ore:extraQuest('r_ore','【繰返】風鉄鉱の回収',2,'風鉄鉱を3つ納品する。','collect','iron_ore',3,94,20,110,true),
+    r_boar:extraQuest('r_boar','【繰返】丘の安全確保',2,'鉄背ボアを2体討伐する。','kill','iron_boar',2,112,24,115,true),
+    r_resin:extraQuest('r_resin','【繰返】琥珀樹脂の調達',2,'琥珀樹脂を2つ納品する。','collect','amber_resin',2,128,28,170,true),
+    r_wraith:extraQuest('r_wraith','【繰返】湿原の巡回',3,'霧の亡霊を2体討伐する。','kill','fog_wraith',2,166,34,270,true),
+    r_crystal:extraQuest('r_crystal','【繰返】結晶洞の清掃',3,'星彩の欠晶を3つ納品する。','collect','crystal_shard',3,148,31,320,true),
+    r_drake:extraQuest('r_drake','【繰返】硝子翼の監視',3,'硝子翼ドレイクを1体討伐する。','kill','glass_drake',1,202,42,360,true,[{id:'high_potion',qty:1}]),
+    r_star:extraQuest('r_star','【繰返】星砂の調達',4,'星砂を2つ納品する。','collect','star_sand',2,238,48,540,true),
+    r_frost:extraQuest('r_frost','【繰返】雪原の護衛',4,'霜牙ルプスを2体討伐する。','kill','frost_lupus',2,260,54,600,true,[{id:'stamina_draught',qty:1}]),
+    r_coin:extraQuest('r_coin','【繰返】古代硬貨の鑑定',4,'古代硬貨を2つ納品する。','collect','ancient_coin',2,280,58,620,true),
+    r_observe:extraQuest('r_observe','【繰返】観測所の安全確認',5,'空洞の騎士を2体討伐する。','kill','hollow_knight',2,320,66,900,true,[{id:'high_ether',qty:1}]),
+    q_frost_lupus:extraQuest('q_frost_lupus','白霜の襲撃者',4,'霜牙ルプスを3体討伐し、雪原の旅人を守る。','kill','frost_lupus',3,890,225,650,false,[{id:'stamina_elixir',qty:1}]),
+    r_metal:extraQuest('r_metal','【繰返】メタル粘体の追跡',3,'メタルスライムを1体討伐する。','kill','metal_slime',1,160,90,340,true,[{id:'metal_core',qty:1}]),
+  });
+
+  Object.assign(RECIPES, {
+    high_potion_bundle:{id:'high_potion_bundle',name:'上質な癒しの小瓶 ×2',description:'月露草と淡光の核から作る高品質回復薬。',minLevel:2,ingredients:[{id:'moonleaf',qty:2},{id:'slime_core',qty:2}],output:{type:'item',id:'high_potion',qty:2}},
+    stamina_draught:{id:'stamina_draught',name:'活力の大瓶',description:'長距離探索用の活力剤。',minLevel:2,ingredients:[{id:'moonleaf',qty:2},{id:'herb',qty:3},{id:'slime_core',qty:2}],output:{type:'item',id:'stamina_draught',qty:1}},
+    high_ether:{id:'high_ether',name:'澄明の大瓶',description:'樹脂を用いた高濃度MP回復薬。',minLevel:3,ingredients:[{id:'amber_resin',qty:2},{id:'crystal_shard',qty:1}],output:{type:'item',id:'high_ether',qty:1}},
+    mega_potion:{id:'mega_potion',name:'大癒しの小瓶',description:'強敵に備える大型回復薬。',minLevel:4,ingredients:[{id:'frost_bloom',qty:2},{id:'moonleaf',qty:3},{id:'crystal_shard',qty:2}],output:{type:'item',id:'mega_potion',qty:1}},
+    stamina_elixir:{id:'stamina_elixir',name:'虹晶活力剤',description:'大量のスタミナを取り戻す希少活力剤。',minLevel:4,ingredients:[{id:'rainbow_crystal',qty:1},{id:'star_sand',qty:2},{id:'moonleaf',qty:2}],output:{type:'item',id:'stamina_elixir',qty:1}},
+    elixir:{id:'elixir',name:'星読みの霊薬',description:'HPとMPを同時に大きく整える霊薬。',minLevel:5,ingredients:[{id:'rainbow_crystal',qty:1},{id:'frost_bloom',qty:2},{id:'ancient_coin',qty:1}],output:{type:'item',id:'elixir',qty:1}},
+    rainbow_guard:{id:'rainbow_guard',name:'三彩の守環',description:'虹全の防御+5、最大MP+10。',minLevel:2,ingredients:[{id:'wolf_fang',qty:3},{id:'prism_dust',qty:2},{id:'silver_feather',qty:1}],output:{type:'equipment',id:'rainbow_guard',qty:1}},
+    rainbow_mantle:{id:'rainbow_mantle',name:'均衡の外套',description:'虹全の最大HP+26、敏捷+3。',minLevel:3,ingredients:[{id:'beast_hide',qty:4},{id:'amber_resin',qty:2},{id:'crystal_shard',qty:2}],output:{type:'equipment',id:'rainbow_mantle',qty:1}},
+    rainbow_coreblade:{id:'rainbow_coreblade',name:'原初の片刃',description:'虹全の攻撃+10、魔力+8。',minLevel:5,ingredients:[{id:'rainbow_crystal',qty:2},{id:'boss_emblem',qty:1},{id:'metal_core',qty:1}],output:{type:'equipment',id:'rainbow_coreblade',qty:1}},
+    white_staff:{id:'white_staff',name:'芽吹きの杖',description:'白零の魔力+7、最大MP+12。',minLevel:2,ingredients:[{id:'bark',qty:3},{id:'moonleaf',qty:2},{id:'silver_feather',qty:1}],output:{type:'equipment',id:'white_staff',qty:1}},
+    white_cloak:{id:'white_cloak',name:'新雪の法衣',description:'白零の防御+6、最大HP+20。',minLevel:3,ingredients:[{id:'frost_bloom',qty:2},{id:'beast_hide',qty:3},{id:'amber_resin',qty:2}],output:{type:'equipment',id:'white_cloak',qty:1}},
+    white_sigil:{id:'white_sigil',name:'始まりの印章',description:'白零の魔力+11、幸運+4。',minLevel:5,ingredients:[{id:'rainbow_crystal',qty:1},{id:'secret_relic',qty:1},{id:'silver_feather',qty:2}],output:{type:'equipment',id:'white_sigil',qty:1}},
+    black_blade:{id:'black_blade',name:'黒夜の短刀',description:'黒零の攻撃+7、敏捷+3。',minLevel:2,ingredients:[{id:'obsidian_piece',qty:2},{id:'wolf_fang',qty:3},{id:'iron_ore',qty:2}],output:{type:'equipment',id:'black_blade',qty:1}},
+    black_coat:{id:'black_coat',name:'断絶の外衣',description:'黒零の最大HP+22、防御+4。',minLevel:3,ingredients:[{id:'beast_hide',qty:4},{id:'obsidian_piece',qty:2},{id:'amber_resin',qty:1}],output:{type:'equipment',id:'black_coat',qty:1}},
+    black_orb:{id:'black_orb',name:'終端の魔珠',description:'黒零の魔力+12、攻撃+6。',minLevel:5,ingredients:[{id:'rainbow_crystal',qty:1},{id:'ruin_circuit',qty:3},{id:'boss_emblem',qty:1}],output:{type:'equipment',id:'black_orb',qty:1}},
+  });
+
+  return { RANKS, ITEM_DEFS, EQUIPMENT_DEFS, CHARACTER_DEFS, SKILLS, PASSIVES, ENEMIES, LOCATIONS, EXPLORATION_DIFFICULTIES, QUESTS, RECIPES, REGIONS };
 })();

@@ -538,3 +538,29 @@ button:disabled { cursor: not-allowed; opacity: .46; }
   .panel-sequence-item::before { left: 17px; }
   .quest-bulk-bar .primary-button { width: 100%; }
 }
+
+/* v0.6 平日テスト版：世界地図・報告・オート活力剤 */
+.map-heading-row { display:flex; gap:12px; align-items:flex-start; justify-content:space-between; }
+.map-heading-row .page-subtitle { margin-bottom:0; }
+.world-region-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:12px; }
+.world-region-card { min-height:116px; text-align:left; color:var(--text); padding:13px; border:1px solid #5c7198; border-radius:12px; background:linear-gradient(145deg,#2a3956,#1a2336); }
+.world-region-card:hover:not(:disabled),.world-region-card.active { border-color:#ffd873; box-shadow:0 0 0 1px rgba(255,216,115,.22); background:linear-gradient(145deg,#3d4f72,#202b42); }
+.world-region-card.locked { opacity:.55; filter:grayscale(.7); }
+.world-region-card span { color:#ffdc7c; font-size:18px; margin-right:6px; }
+.world-region-card b { font-size:14px; }
+.world-region-card small,.world-region-card em { display:block; color:var(--muted); margin-top:5px; font-size:10px; line-height:1.5; font-style:normal; }
+.auto-tonic-box { display:grid; gap:8px; border:1px solid #687fa7; background:rgba(38,54,82,.55); padding:11px; border-radius:10px; margin-top:12px; }
+.auto-tonic-box b { color:#ffdd86; font-size:13px; }
+.auto-tonic-box small { color:var(--muted); font-size:11px; line-height:1.6; }
+.auto-tonic-box label { display:grid; grid-template-columns:120px 1fr; align-items:center; gap:8px; color:#dbe7ff; font-size:11px; }
+.auto-tonic-box select { color:var(--text); border:1px solid #7489ae; border-radius:7px; background:#1b2941; padding:7px; }
+.report-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+.report-section { border:1px solid #53688c; border-radius:11px; background:rgba(19,28,44,.65); padding:12px; }
+.report-section h3 { margin:0 0 8px; color:#ffdc8b; font-size:13px; }
+.report-section ul { padding-left:18px; margin:0; color:#d4def1; font-size:11px; line-height:1.8; }
+@media (max-width:600px) {
+  .world-region-grid,.report-grid { grid-template-columns:1fr; }
+  .map-heading-row { align-items:center; }
+  .map-heading-row .page-title { font-size:23px; }
+  .auto-tonic-box label { grid-template-columns:1fr; gap:4px; }
+}
