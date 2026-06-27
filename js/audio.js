@@ -234,17 +234,34 @@ window.OMNIL_AUDIO = (() => {
   function sfx(kind = 'tap') {
     if (!settings.sfx || !resume()) return;
     const now = ctx.currentTime + 0.01;
-    if (kind === 'hit') {
-      tone(NOTE.C3, .09, now, { destination: sfxGain, wave: 'square', volume: .12 });
-      tone(NOTE.G2, .13, now + .02, { destination: sfxGain, wave: 'sawtooth', volume: .07 });
+    const play = (notes, wave = 'triangle', gap = .055, duration = .12, volume = .06) => notes.forEach((name, i) => tone(NOTE[name], duration + i * .018, now + i * gap, { destination: sfxGain, wave, volume: Math.max(.02, volume - i * .006) }));
+    if (kind === 'attack' || kind === 'hit') {
+      tone(NOTE.C3, .075, now, { destination: sfxGain, wave: 'square', volume: .125 });
+      tone(NOTE.G2, .12, now + .018, { destination: sfxGain, wave: 'sawtooth', volume: .07 });
+      tone(NOTE.C4, .07, now + .032, { destination: sfxGain, wave: 'square', volume: .045 });
+    } else if (kind === 'magic') {
+      play(['A4','D5','A5'], 'sine', .07, .19, .07);
+      tone(NOTE.E4, .28, now + .03, { destination: sfxGain, wave: 'triangle', volume: .028, detune: 8 });
+    } else if (kind === 'damage') {
+      tone(NOTE.G2, .12, now, { destination: sfxGain, wave: 'sawtooth', volume: .10 });
+      tone(NOTE.D3, .085, now + .018, { destination: sfxGain, wave: 'square', volume: .08, detune: -18 });
     } else if (kind === 'heal') {
-      tone(NOTE.C5, .18, now, { destination: sfxGain, wave: 'sine', volume: .06 });
-      tone(NOTE.E5, .21, now + .08, { destination: sfxGain, wave: 'sine', volume: .055 });
-      tone(NOTE.G5, .25, now + .16, { destination: sfxGain, wave: 'sine', volume: .05 });
+      play(['C5','E5','G5'], 'sine', .075, .20, .065);
+    } else if (kind === 'buff') {
+      play(['D4','A4','D5'], 'triangle', .07, .16, .06);
+    } else if (kind === 'debuff') {
+      play(['E4','C4','A3'], 'sawtooth', .065, .14, .055);
+    } else if (kind === 'barrier') {
+      play(['G4','C5','G5'], 'sine', .06, .18, .052);
+      tone(NOTE.C4, .26, now, { destination: sfxGain, wave: 'triangle', volume: .035 });
+    } else if (kind === 'evade') {
+      play(['E5','A5'], 'triangle', .05, .11, .05);
+    } else if (kind === 'encounter') {
+      play(['D3','A3','D4'], 'square', .07, .13, .075);
     } else if (kind === 'victory') {
-      ['C4','E4','G4','C5'].forEach((n, i) => tone(NOTE[n], .32, now + i*.12, { destination: sfxGain, wave: 'triangle', volume: .075 }));
+      play(['C4','E4','G4','C5'], 'triangle', .12, .32, .075);
     } else if (kind === 'unlock') {
-      ['A4','C5','E5'].forEach((n, i) => tone(NOTE[n], .20, now + i*.08, { destination: sfxGain, wave: 'triangle', volume: .06 }));
+      play(['A4','C5','E5'], 'triangle', .08, .20, .06);
     } else {
       tone(NOTE.E5, .07, now, { destination: sfxGain, wave: 'square', volume: .04 });
     }

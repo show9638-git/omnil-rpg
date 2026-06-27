@@ -3,10 +3,17 @@
   'use strict';
 
   const D = window.OMNIL_DATA;
-  const SAVE_KEY = 'omnil_rpg_prototype_v08';
+  const SAVE_KEY = 'omnil_rpg_prototype_v09';
   const STAMINA_RECOVERY_MS = 3 * 60 * 1000;
   const AUTO_STAMINA_MULTIPLIER = 1.5;
   const STAMINA_EPSILON = 0.0001;
+  const AUTO_POLICY_DEFAULTS = {
+    enabled: true, useDuringAutoExplore: true,
+    hpThreshold: 42, mpThreshold: 28, reviveEnabled: true, barrierThreshold: 22,
+    healingItemId: 'potion', manaItemId: 'ether', reviveItemId: 'phoenix_leaf', barrierItemId: 'ward_orb',
+    maxHealPerBattle: 5, maxManaPerBattle: 3, maxRevivePerBattle: 2, maxBarrierPerBattle: 2,
+    staminaEnabled: true, staminaItemId: 'stamina_tonic', maxStaminaPerRun: 8,
+  };
   const EQUIP_SLOTS = ['head','body','arms','legs','rightHand','leftHand','accessory1','accessory2'];
   const EQUIP_SLOT_LABELS = { head:'頭', body:'体', arms:'腕', legs:'足', rightHand:'右手', leftHand:'左手', accessory1:'装飾1', accessory2:'装飾2' };
   let autoExploreTimer = null;
@@ -41,7 +48,7 @@
       };
     });
     return {
-      version: 8,
+      version: 9,
       started: false,
       scene: 'title',
       currentLocation: 'lindholm',
@@ -61,7 +68,28 @@
       audio: { music: true, sfx: true, volume: .52 },
       foodBuff: null,
       storyLog: [],
-      automation: { battleAutoDefault: false },
+      automation: {
+        battleAutoDefault: false,
+        itemPolicy: {
+          enabled: true,
+          useDuringAutoExplore: true,
+          hpThreshold: 42,
+          mpThreshold: 28,
+          reviveEnabled: true,
+          barrierThreshold: 22,
+          healingItemId: 'potion',
+          manaItemId: 'ether',
+          reviveItemId: 'phoenix_leaf',
+          barrierItemId: 'ward_orb',
+          maxHealPerBattle: 5,
+          maxManaPerBattle: 3,
+          maxRevivePerBattle: 2,
+          maxBarrierPerBattle: 2,
+          staminaEnabled: true,
+          staminaItemId: 'stamina_tonic',
+          maxStaminaPerRun: 8,
+        },
+      },
       autoExplore: null,
       characters,
       battle: null,
@@ -92,11 +120,12 @@
       merged.equipment[id] = { ...loadout, ...(typeof oldEquip === 'object' ? oldEquip : {}) };
       EQUIP_SLOTS.forEach((slot) => { const equipId = merged.equipment[id][slot]; if (equipId && D.EQUIPMENT_DEFS[equipId]) merged.ownedEquipment.push(equipId); });
     });
+    ['rainbow','white','black'].forEach((id) => { merged.equipment[id] = sanitizeEquipmentLoadout(merged.equipment[id]); });
     merged.ownedEquipment = [...new Set(merged.ownedEquipment.filter((id) => D.EQUIPMENT_DEFS[id]))];
     merged.audio = { ...base.audio, ...(candidate.audio || {}) };
     merged.foodBuff = candidate.foodBuff || null;
     merged.storyLog = [...(candidate.storyLog || [])];
-    merged.automation = { ...base.automation, ...(candidate.automation || {}) };
+    merged.automation = { ...base.automation, ...(candidate.automation || {}), itemPolicy: { ...base.automation.itemPolicy, ...(candidate.automation?.itemPolicy || {}) } };
     merged.flags = { ...base.flags, ...(candidate.flags || {}) };
     merged.questCompletions = { ...(candidate.questCompletions || {}) };
     merged.stamina = { ...base.stamina, ...(candidate.stamina || {}) };
@@ -135,7 +164,11 @@
       merged.storyLog = [...(candidate.storyLog || [])];
       merged.logs = ['v0.8移行：冒険者Lv.100・十地方・左右手装備・地方食堂・キークエストを追加しました。', ...(candidate.logs || [])].slice(0, 50);
     }
-    merged.version = 8;
+    if (previousVersion < 9 && !candidate.flags?.v9CombatEconomyMigration) {
+      merged.flags.v9CombatEconomyMigration = true;
+      merged.logs = ['v0.9移行：長期成長曲線／装備特性／オート道具設定／戦闘テンポを再調整しました。', ...(candidate.logs || [])].slice(0, 50);
+    }
+    merged.version = 9;
     merged.stamina.current = Math.max(0, Number(merged.stamina.current) || base.stamina.current);
     merged.stamina.updatedAt = Number(merged.stamina.updatedAt) || Date.now();
     merged.scene = 'title';
@@ -146,7 +179,7 @@
 
   function loadState() {
     try {
-      const raw = localStorage.getItem(SAVE_KEY) || localStorage.getItem('omnil_rpg_prototype_v06') || localStorage.getItem('omnil_rpg_prototype_v05') || localStorage.getItem('omnil_rpg_prototype_v04') || localStorage.getItem('omnil_rpg_prototype_v03') || localStorage.getItem('omnil_rpg_prototype_v01');
+      const raw = localStorage.getItem(SAVE_KEY) || localStorage.getItem('omnil_rpg_prototype_v08') || localStorage.getItem('omnil_rpg_prototype_v07') || localStorage.getItem('omnil_rpg_prototype_v06') || localStorage.getItem('omnil_rpg_prototype_v05') || localStorage.getItem('omnil_rpg_prototype_v04') || localStorage.getItem('omnil_rpg_prototype_v03') || localStorage.getItem('omnil_rpg_prototype_v01');
       return raw ? normalizeState(JSON.parse(raw)) : freshState();
     } catch (error) {
       console.warn('セーブ読み込み失敗', error);
@@ -321,16 +354,27 @@
   }
 
   function emptyEquipmentLoadout() { return { head:null, body:null, arms:null, legs:null, rightHand:null, leftHand:null, accessory1:null, accessory2:null }; }
+  function isTwoHandEquip(equipId) {
+    const hand = D.EQUIPMENT_DEFS?.[equipId]?.handType;
+    return hand === 'twoHand' || hand === 'twoHandShield';
+  }
+  function sanitizeEquipmentLoadout(loadout) {
+    const next = { ...emptyEquipmentLoadout(), ...(loadout || {}) };
+    if (isTwoHandEquip(next.rightHand)) next.leftHand = null;
+    // 左手には両手装備を保持しない。旧セーブ・不正値の双方を修復する。
+    if (isTwoHandEquip(next.leftHand)) next.leftHand = null;
+    return next;
+  }
   function getDef(id) { return D.CHARACTER_DEFS[id]; }
   function getChar(id) { return state.characters[id]; }
   function getEquipmentLoadout(id, localState = state) {
     const current = localState.equipment?.[id];
-    if (current && typeof current === 'object') return { ...emptyEquipmentLoadout(), ...current };
-    return emptyEquipmentLoadout();
+    return sanitizeEquipmentLoadout(current && typeof current === 'object' ? current : emptyEquipmentLoadout());
   }
   function getEquippedEquipment(id, localState = state) {
     const loadout = getEquipmentLoadout(id, localState);
-    return EQUIP_SLOTS.map((slot) => loadout[slot]).filter(Boolean).map((equipId) => D.EQUIPMENT_DEFS[equipId]).filter(Boolean);
+    const ids = EQUIP_SLOTS.map((slot) => loadout[slot]).filter(Boolean);
+    return ids.map((equipId) => D.EQUIPMENT_DEFS[equipId]).filter(Boolean);
   }
   function equipmentAllows(id, equip) {
     return !equip?.allowed || equip.allowed === 'all' || (Array.isArray(equip.allowed) && equip.allowed.includes(id));
@@ -366,21 +410,30 @@
   function equipEquipment(id, slot, equipId) {
     const equip = D.EQUIPMENT_DEFS[equipId];
     if (!equip || !EQUIP_SLOTS.includes(slot) || !state.ownedEquipment?.includes(equipId) || !equipmentAllows(id, equip) || !equipmentFitsSlot(equip,slot)) return false;
-    removeEquippedItemEverywhere(equipId);
     const loadout = getEquipmentLoadout(id);
-    if (equip.handType === 'twoHand' || equip.handType === 'twoHandShield') { loadout.rightHand = equipId; loadout.leftHand = null; }
-    else {
-      if (slot === 'leftHand' && loadout.rightHand && ['twoHand','twoHandShield'].includes(D.EQUIPMENT_DEFS[loadout.rightHand]?.handType)) loadout.rightHand = null;
-      loadout[slot] = equipId;
+    // 両手装備中は左手を空欄扱いにせず、明示的に変更を拒否する。
+    if (slot === 'leftHand' && isTwoHandEquip(loadout.rightHand)) return false;
+    removeEquippedItemEverywhere(equipId);
+    const next = getEquipmentLoadout(id);
+    if (isTwoHandEquip(equipId)) {
+      next.rightHand = equipId;
+      next.leftHand = null;
+    } else {
+      next[slot] = equipId;
     }
-    state.equipment[id] = loadout;
+    state.equipment[id] = sanitizeEquipmentLoadout(next);
     capResources(id); appendLog(`${getDef(id).short}が${equip.name}を${EQUIP_SLOT_LABELS[slot]}に装備。`); saveGame(); return true;
   }
   function unequipEquipment(id, slot) {
-    if (!EQUIP_SLOTS.includes(slot)) return; const loadout = getEquipmentLoadout(id); const old = loadout[slot];
-    if (slot === 'leftHand' && loadout.rightHand && ['twoHand','twoHandShield'].includes(D.EQUIPMENT_DEFS[loadout.rightHand]?.handType)) { loadout.rightHand = null; }
-    else loadout[slot] = null;
-    state.equipment[id] = loadout; capResources(id); if (old) appendLog(`${getDef(id).short}が${D.EQUIPMENT_DEFS[old]?.name || '装備'}を外した。`); saveGame();
+    if (!EQUIP_SLOTS.includes(slot)) return;
+    const loadout = getEquipmentLoadout(id);
+    if (slot === 'leftHand' && isTwoHandEquip(loadout.rightHand)) return false;
+    const old = loadout[slot];
+    loadout[slot] = null;
+    state.equipment[id] = sanitizeEquipmentLoadout(loadout);
+    capResources(id);
+    if (old) appendLog(`${getDef(id).short}が${D.EQUIPMENT_DEFS[old]?.name || '装備'}を外した。`);
+    saveGame(); return true;
   }
 
   function panelEffects(id) {
@@ -464,7 +517,7 @@
     return Math.max(1, Math.ceil(Number(skill.mp || 0) * Math.max(.5, 1 + discount)));
   }
 
-  function levelExpRequired(level) { return 44 + (level - 1) * 34; }
+  function levelExpRequired(level) { const n = Math.max(0, Number(level || 1) - 1); return Math.floor(52 + n * 42 + n * n * .56); }
 
   function addCharacterExp(id, amount) {
     const ch = getChar(id); ch.exp += amount; const levels = [];
@@ -589,33 +642,40 @@
     toast(`${results.length}件をまとめて報告。${gold}G／冒険者経験${adv}を獲得。`, 'good');
   }
 
-  function canCraft(recipe) {
-    if (recipe.minLevel && !rankAllowed(String(recipe.minLevel))) return false;
+  function normalizeQuantity(value, max = 99) {
+    return clamp(Math.floor(Number(value) || 1), 1, max);
+  }
+  function canCraft(recipe, quantity = 1) {
+    const qty = recipe?.output?.type === 'equipment' ? 1 : normalizeQuantity(quantity);
+    if (!recipe || (recipe.minLevel && !rankAllowed(String(recipe.minLevel)))) return false;
     if (recipe.output.type === 'equipment' && state.ownedEquipment?.includes(recipe.output.id)) return false;
-    return recipe.ingredients.every((ing) => countItem(ing.id) >= ing.qty);
+    return recipe.ingredients.every((ing) => countItem(ing.id) >= ing.qty * qty);
   }
 
-  function craft(id) {
+  function craft(id, quantity = 1) {
     const recipe = D.RECIPES[id];
-    if (!recipe || !canCraft(recipe)) return false;
-    recipe.ingredients.forEach((ing) => takeItem(ing.id, ing.qty));
-    if (recipe.output.type === 'item') addItem(recipe.output.id, recipe.output.qty);
+    const qty = recipe?.output?.type === 'equipment' ? 1 : normalizeQuantity(quantity);
+    if (!recipe || !canCraft(recipe, qty)) return false;
+    recipe.ingredients.forEach((ing) => takeItem(ing.id, ing.qty * qty));
+    if (recipe.output.type === 'item') addItem(recipe.output.id, (recipe.output.qty || 1) * qty);
     if (recipe.output.type === 'equipment') {
       addOwnedEquipment(recipe.output.id);
       if (!state.crafted.includes(recipe.id)) state.crafted.push(recipe.id);
     }
-    appendLog(`製造した：${recipe.name}`);
-    toast(`製造完了：${recipe.name}`, 'good');
+    appendLog(`製造した：${recipe.name} ×${qty}`);
+    toast(`製造完了：${recipe.name}${qty > 1 ? ` ×${qty}` : ''}`, 'good');
     saveGame(); render();
     return true;
   }
 
-  function buyItem(id) {
-    const item = D.ITEM_DEFS[id];
-    if (!item?.buy || state.gold < item.buy) return false;
-    state.gold -= item.buy;
-    addItem(id, 1);
-    toast(`${item.name}を購入しました。`, 'good');
+  function buyItem(id, quantity = 1) {
+    const item = D.ITEM_DEFS[id]; const qty = normalizeQuantity(quantity);
+    const cost = (item?.buy || 0) * qty;
+    if (!item?.buy || state.gold < cost) return false;
+    state.gold -= cost;
+    addItem(id, qty);
+    appendLog(`${item.name}を${qty}個購入（${cost}G）。`);
+    toast(`${item.name}を${qty}個購入しました。`, 'good');
     saveGame(); render();
     return true;
   }
@@ -639,8 +699,13 @@
     saveGame(); render();
   }
 
+  function innCost() {
+    const level = Number(getRank().level || 1);
+    return Math.max(30, Math.round(20 + 12 * Math.pow(level, 1.35)));
+  }
+
   function restAtInn() {
-    const cost = 20;
+    const cost = innCost();
     if (state.gold < cost) return toast('所持金が足りません。', 'warn');
     state.gold -= cost;
     Object.keys(state.characters).forEach((id) => {
@@ -1011,21 +1076,30 @@
   function explorationAvailable() { return Object.keys(state.characters).every((id) => getChar(id).hp > 0); }
   function autoResult(text) { if (state.autoExplore) { state.autoExplore.results.push(text); if (state.autoExplore.results.length > 12) state.autoExplore.results.shift(); } }
 
-  // オート探索では、次の探索／戦闘で設定下限を割り込む直前にだけ活力剤を使う。
-  // 指定個数を使い切るか、所持品が尽きた時点で通常の下限停止／力尽き判定へ戻る。
+  function getAutoPolicy() {
+    state.automation ||= {};
+    state.automation.itemPolicy = { ...AUTO_POLICY_DEFAULTS, ...(state.automation.itemPolicy || {}) };
+    return state.automation.itemPolicy;
+  }
+  function autoItemCount(key) { return Number(state.battle?.autoItems?.[key] || 0); }
+  function canUseAutoItem(key, limit) { return Number(limit || 0) > autoItemCount(key); }
+  function markAutoItem(key) { if (!state.battle) return; state.battle.autoItems ||= {}; state.battle.autoItems[key] = autoItemCount(key) + 1; }
+
+  // オート探索では、次の探索／戦闘で設定下限を割り込む直前にだけ、共通オート設定の活力剤を使う。
   function autoRecoverStaminaIfNeeded(requiredCost, phaseLabel) {
     const a = state.autoExplore;
     if (!a) return canSpendStamina(requiredCost, 0);
     refreshStamina();
     if (canSpendStamina(requiredCost, a.floor)) return true;
-    const item = D.ITEM_DEFS[a.tonicId];
-    const maxUse = Math.max(0, Number(a.tonicLimit) || 0);
-    while (item?.effect?.restoreStamina && a.tonicUsed < maxUse && countItem(item.id) > 0 && !canSpendStamina(requiredCost, a.floor)) {
+    const policy = getAutoPolicy();
+    const item = D.ITEM_DEFS[policy.staminaItemId];
+    const maxUse = Math.max(0, Number(policy.maxStaminaPerRun) || 0);
+    while (policy.staminaEnabled && item?.effect?.restoreStamina && a.staminaUsed < maxUse && countItem(item.id) > 0 && !canSpendStamina(requiredCost, a.floor)) {
       if (!takeItem(item.id, 1)) break;
       const gained = restoreStamina(item.effect.restoreStamina, `オート探索：${item.name}を自動使用。`, { allowOvercap: !!item.effect.allowOvercap });
-      a.tonicUsed += 1;
+      a.staminaUsed += 1;
       a.recovered = (a.recovered || 0) + gained;
-      const text = `${item.name}を自動使用（${a.tonicUsed}/${maxUse}・ST +${formatStamina(gained)}）`;
+      const text = `${item.name}を自動使用（${a.staminaUsed}/${maxUse}・ST +${formatStamina(gained)}）`;
       appendLog(`${phaseLabel}の前に${text}`);
       autoResult(text);
     }
@@ -1126,10 +1200,7 @@
     if (state.stamina.current <= STAMINA_EPSILON) return toast('スタミナが不足しています。宿屋か活力剤で回復してください。', 'warn');
     const currentFloorMax = Math.floor(state.stamina.current);
     const suggested = clamp(Math.floor(state.stamina.current - explorationCost(difficulty, true) * 2), 0, currentFloorMax);
-    const tonics = Object.values(D.ITEM_DEFS).filter((item) => item.type === 'consumable' && item.effect?.restoreStamina && countItem(item.id) > 0);
-    const options = [`<option value="">使用しない</option>`, ...tonics.map((item) => `<option value="${item.id}" ${item.id === 'stamina_tonic' ? 'selected' : ''}>${item.name}（所持 ${countItem(item.id)}／ST +${item.effect.restoreStamina}）</option>`)].join('');
-    const defaultItem = tonics.find((item)=>item.id==='stamina_tonic') || tonics[0];
-    const defaultCount = defaultItem ? Math.min(3, countItem(defaultItem.id)) : 0;
+    const policy = getAutoPolicy(); const tonic = D.ITEM_DEFS[policy.staminaItemId];
     showModal(`<div class="modal-header"><div><h2>オート探索の設定</h2><p>${loc.name}／${difficulty.name}を、指定したスタミナ下限まで自動で探索します。</p></div><button class="modal-close" data-action="modal-close">×</button></div>
       <div class="auto-setup">
         <label>現在のスタミナ <b>${formatStamina(state.stamina.current)}/${getStaminaMax()}</b></label>
@@ -1137,21 +1208,21 @@
         <label for="autoStaminaFloor">停止するスタミナ下限：<output id="autoFloorValue">${suggested}</output></label>
         <input id="autoStaminaFloor" type="range" min="0" max="${currentFloorMax}" step="1" value="${suggested}" oninput="document.getElementById('autoFloorValue').value=this.value">
         <div class="auto-floor-presets"><button class="small-button" type="button" onclick="document.getElementById('autoStaminaFloor').value=0;document.getElementById('autoFloorValue').value=0">0（使い切る）</button><button class="small-button" type="button" onclick="document.getElementById('autoStaminaFloor').value=10;document.getElementById('autoFloorValue').value=10">10</button><button class="small-button" type="button" onclick="document.getElementById('autoStaminaFloor').value=25;document.getElementById('autoFloorValue').value=25">25</button><button class="small-button" type="button" onclick="document.getElementById('autoStaminaFloor').value=Math.floor(${state.stamina.current}/2);document.getElementById('autoFloorValue').value=Math.floor(${state.stamina.current}/2)">半分</button></div>
-        <div class="auto-tonic-box"><b>活力剤の自動使用</b><small>次の探索・戦闘で下限を割り込む直前にだけ使用します。使用上限に達すると、その時点から下限判定で停止します。</small><label>使う活力剤<select id="autoTonicId">${options}</select></label><label>自動使用する数<select id="autoTonicCount"><option value="0">0回</option>${Array.from({length: Math.min(20, Math.max(...tonics.map((x)=>countItem(x.id)), 0))},(_,i)=>`<option value="${i+1}" ${i+1===defaultCount?'selected':''}>${i+1}回</option>`).join('')}</select></label></div>
-        <p class="note">下限0かつ活力剤も尽きた場合は、スタミナ0でオート探索を終了します。撤退ペナルティはありません。</p>
+        <div class="trait-box"><b>自動道具設定</b><br>周回中の活力剤：${policy.staminaEnabled && tonic ? `${tonic.name}（最大${policy.maxStaminaPerRun}回）` : '使用しない'}<br>戦闘中の回復道具：${policy.enabled && policy.useDuringAutoExplore ? '使用する' : '使用しない'}<br><button class="small-button" data-action="open-automation-settings">オート道具設定を開く</button></div>
+        <p class="note">活力剤・回復道具の種類と使用回数は、メニューの「オート設定」でまとめて管理します。下限0なら、スタミナが0になるまで探索します。</p>
       </div><div class="modal-footer"><button class="secondary-button" data-action="modal-close">戻る</button><button class="primary-button" data-action="auto-explore-confirm" data-id="${locationId}">この設定で開始</button></div>`);
   }
 
-  function startAutoExplore(locationId, floor = 0, tonicId = '', tonicLimit = 0) {
+  function startAutoExplore(locationId, floor = 0) {
     if (!explorationAvailable()) return toast('戦闘不能の仲間がいます。宿屋で休んでください。', 'warn');
     const difficulty = getSelectedDifficulty(locationId); if (!difficulty || !rankAllowed(difficulty.rank)) return toast('この探索難易度はまだ解放されていません。', 'warn');
     refreshStamina(); floor = clamp(Number(floor) || 0, 0, Math.floor(state.stamina.current));
+    const policy = getAutoPolicy(); const item = D.ITEM_DEFS[policy.staminaItemId];
+    const canAutoRecover = policy.staminaEnabled && item?.effect?.restoreStamina && Number(policy.maxStaminaPerRun || 0) > 0 && countItem(item.id) > 0;
     if (state.stamina.current <= STAMINA_EPSILON) return toast('スタミナが不足しています。宿屋か活力剤で回復してください。', 'warn');
-    if (state.stamina.current <= floor + STAMINA_EPSILON && !(tonicId && Number(tonicLimit) > 0 && countItem(tonicId) > 0)) return toast('下限が現在のスタミナ以上です。下限を下げるか、活力剤を設定してください。', 'warn');
-    const item = D.ITEM_DEFS[tonicId];
-    const usableLimit = item?.effect?.restoreStamina ? Math.min(Math.max(0, Number(tonicLimit) || 0), countItem(tonicId)) : 0;
-    state.autoExplore = { locationId, difficultyId: difficulty.id, floor, steps: 0, results: [], tonicId: usableLimit ? tonicId : '', tonicLimit: usableLimit, tonicUsed: 0, recovered: 0 };
-    appendLog(`${D.LOCATIONS[locationId].name}で${difficulty.name}のオート探索を開始（下限 ${floor}／活力剤 ${usableLimit ? `${item.name}×${usableLimit}` : 'なし'}）。`);
+    if (state.stamina.current <= floor + STAMINA_EPSILON && !canAutoRecover) return toast('下限が現在のスタミナ以上です。下限を下げるか、オート設定で活力剤を設定してください。', 'warn');
+    state.autoExplore = { locationId, difficultyId: difficulty.id, floor, steps: 0, results: [], staminaUsed: 0, recovered: 0 };
+    appendLog(`${D.LOCATIONS[locationId].name}で${difficulty.name}のオート探索を開始（下限 ${floor}／活力剤 ${canAutoRecover ? `${item.name}×${policy.maxStaminaPerRun}` : 'なし'}）。`);
     saveGame(); render(); window.clearTimeout(autoExploreTimer); autoExploreTimer = window.setTimeout(runAutoExploreStep, 300);
   }
 
@@ -1170,9 +1241,9 @@
     const a = state.autoExplore; if (!a) return;
     window.clearTimeout(autoExploreTimer);
     const summary = a.results.length ? a.results.map((x) => `・${x}`).join('\n') : '目立った発見はなかった。';
-    const steps = a.steps; const difficulty = getDifficulty(a.difficultyId);
+    const steps = a.steps; const difficulty = getDifficulty(a.difficultyId); const policy = getAutoPolicy(); const item = D.ITEM_DEFS[policy.staminaItemId];
     state.autoExplore = null; saveGame(); render();
-    showDialogue('オート探索 終了', `${reason}\n難易度：${difficulty.name}\n探索回数：${steps}回\n自動使用：${a.tonicId ? `${D.ITEM_DEFS[a.tonicId]?.name || '活力剤'} ${a.tonicUsed || 0}/${a.tonicLimit || 0}回（ST +${formatStamina(a.recovered || 0)}）` : 'なし'}\n残りスタミナ：${formatStamina(state.stamina.current)}/${getStaminaMax()}\n\n${summary}`);
+    showDialogue('オート探索 終了', `${reason}\n難易度：${difficulty.name}\n探索回数：${steps}回\n自動使用：${item ? `${item.name} ${a.staminaUsed || 0}/${policy.maxStaminaPerRun || 0}回（ST +${formatStamina(a.recovered || 0)}）` : 'なし'}\n残りスタミナ：${formatStamina(state.stamina.current)}/${getStaminaMax()}\n\n${summary}`);
   }
   function stopAutoExplore(reason = 'オート探索を中止しました。') { if (!state.autoExplore) return; window.clearTimeout(autoExploreTimer); state.autoExplore = null; saveGame(); render(); toast(reason, 'warn'); }
 
@@ -1193,7 +1264,7 @@
     state.battle = { locationId, difficultyId: difficulty.id, enemies, turnIndex: 0, order: ['rainbow', 'white', 'black'], phase: 'command', selected: null, auto: !!options.auto, autoExplore: !!options.autoExplore, log: `${difficulty.name}：${enemies.map((e) => e.displayName || e.name).join('、')} が現れた！
 スタミナ -${formatStamina(cost)}` };
     ['rainbow','white','black'].forEach((id) => { const rate=getEquipmentSpecials(id).barrierStart||0; if(rate>0) applyBarrier(id,rate); });
-    state.scene = 'battle'; audio.sfx('hit'); render(); if (state.battle.auto) window.setTimeout(runAutoTurn, 360); return true;
+    state.scene = 'battle'; audio.sfx('encounter'); render(); if (state.battle.auto) window.setTimeout(runAutoTurn, 360); return true;
   }
 
   function battleLog(message) {
@@ -1226,15 +1297,32 @@
   function targetEnemy(index) { const b=state.battle;const enemy=getAliveEnemies()[Number(index)];if(!enemy)return;const actorId=b.order[b.turnIndex];if(b.selected.type==='attack')executeAttack(actorId,enemy);else if(b.selected.type==='skill')executeSkill(actorId,D.SKILLS[b.selected.skillId],enemy); }
   function targetAlly(id) {const b=state.battle; const actorId=b.order[b.turnIndex];if(b.selected.type==='item')executeItem(actorId,b.selected.itemId,id);else if(b.selected.type==='skill')executeSkill(actorId,D.SKILLS[b.selected.skillId],id);}
   function toggleBattleAuto() { if(!state.battle)return; state.battle.auto=!state.battle.auto; battleLog(state.battle.auto?'自動戦闘を開始。':'自動戦闘を停止。'); render(); if(state.battle.auto)window.setTimeout(runAutoTurn,180); }
+  function chooseAutoItem(actorId) {
+    const b=state.battle; const p=getAutoPolicy();
+    if(!b || !p.enabled || (b.autoExplore && !p.useDuringAutoExplore)) return null;
+    const alive=getAliveAllies(); const down=['rainbow','white','black'].filter(id=>getChar(id).hp<=0);
+    const lowest=alive.slice().sort((a,b)=>pct(getChar(a).hp,getStats(a).maxHp)-pct(getChar(b).hp,getStats(b).maxHp))[0];
+    const pick=(key,itemId,target,limit)=>{
+      const item=D.ITEM_DEFS[itemId];
+      return item && countItem(itemId)>0 && canUseAutoItem(key,limit) ? {itemId,target,key} : null;
+    };
+    if(down.length && p.reviveEnabled) { const action=pick('revive',p.reviveItemId,down[0],p.maxRevivePerBattle); if(action)return action; }
+    if(lowest && pct(getChar(lowest).hp,getStats(lowest).maxHp)<=Number(p.hpThreshold||0)) { const action=pick('heal',p.healingItemId,lowest,p.maxHealPerBattle); if(action)return action; }
+    const lowMp=alive.slice().sort((a,b)=>pct(getChar(a).mp,getStats(a).maxMp)-pct(getChar(b).mp,getStats(b).maxMp))[0];
+    if(lowMp && pct(getChar(lowMp).mp,getStats(lowMp).maxMp)<=Number(p.mpThreshold||0)) { const action=pick('mana',p.manaItemId,lowMp,p.maxManaPerBattle); if(action)return action; }
+    if(lowest && !getChar(lowest).barrier && pct(getChar(lowest).hp,getStats(lowest).maxHp)<=Number(p.barrierThreshold||0)) { const action=pick('barrier',p.barrierItemId,lowest,p.maxBarrierPerBattle); if(action)return action; }
+    return null;
+  }
   function chooseAutoAction(actorId) {
-    const skills=currentSkills(actorId).filter(s=>getChar(actorId).mp>=skillMpCost(actorId,s)); const alive=getAliveAllies(); const down=['rainbow','white','black'].filter(id=>getChar(id).hp<=0); const lowest=alive.sort((a,b)=>pct(getChar(a).hp,getStats(a).maxHp)-pct(getChar(b).hp,getStats(b).maxHp))[0];
+    const itemAction=chooseAutoItem(actorId); if(itemAction)return {item:itemAction};
+    const skills=currentSkills(actorId).filter(s=>getChar(actorId).mp>=skillMpCost(actorId,s)); const alive=getAliveAllies(); const down=['rainbow','white','black'].filter(id=>getChar(id).hp<=0); const lowest=alive.slice().sort((a,b)=>pct(getChar(a).hp,getStats(a).maxHp)-pct(getChar(b).hp,getStats(b).maxHp))[0];
     const low=lowest&&pct(getChar(lowest).hp,getStats(lowest).maxHp)<.42;
     const revive=skills.filter(s=>(s.revive||s.reviveAll)&&down.length); if(revive.length)return {skill:revive.sort((a,b)=>b.mp-a.mp)[0],target:down[0]};
     const heals=skills.filter(s=>s.heal&&(['ally','allAllies','self'].includes(s.target))); if(low&&heals.length){const best=heals.sort((a,b)=>(b.heal||0)-(a.heal||0))[0];return {skill:best,target:best.target==='ally'?lowest:null};}
     const enemy=getAliveEnemies().sort((a,b)=>a.hp-b.hp)[0]; const damages=skills.filter(s=>s.power||s.allEnemyPower); if(damages.length){let pool=damages;if(actorId==='white'&&low)pool=heals.length?heals:damages;const best=pool.sort((a,b)=>((b.power||b.allEnemyPower||0)*1.1+b.mp*.01)-((a.power||a.allEnemyPower||0)*1.1+a.mp*.01))[0];return {skill:best,target:best.target==='enemy'?enemy:null};}
     return {attack:enemy};
   }
-  function runAutoTurn() { const b=state.battle;if(!b||!b.auto||b.phase==='enemy')return; const actorId=b.order[b.turnIndex];if(!actorId||getChar(actorId).hp<=0){afterPlayerAction();return;} const a=chooseAutoAction(actorId);if(a.skill)executeSkill(actorId,a.skill,a.target);else executeAttack(actorId,a.attack); }
+  function runAutoTurn() { const b=state.battle;if(!b||!b.auto||b.phase==='enemy')return; const actorId=b.order[b.turnIndex];if(!actorId||getChar(actorId).hp<=0){afterPlayerAction();return;} const a=chooseAutoAction(actorId);if(a.item)executeItem(actorId,a.item.itemId,a.item.target,a.item.key);else if(a.skill)executeSkill(actorId,a.skill,a.target);else executeAttack(actorId,a.attack); }
 
   function buffValue(entity, stat) { return entity.status?.buffs?.[stat]?.value || 0; }
   function combatStat(id,key) { const ch=getChar(id); let v=getStats(id)[key]; const b=buffValue(ch,key); if(b) v=Math.floor(v*(1+b*.14)); if(ch.status?.weaken&&(key==='atk'||key==='mag'))v=Math.floor(v*.72); return v; }
@@ -1251,6 +1339,8 @@
     const charged=getChar(attackerId)?.charge||0;
     if(charged){power*=1+charged; delete getChar(attackerId).charge;}
     if(gear.damageRate)power*=1+gear.damageRate;
+    if(kind==='physical' && gear.physicalRate) power*=1+gear.physicalRate;
+    if((kind==='magic'||kind==='special') && gear.magicRate) power*=1+gear.magicRate;
     if(gear.allRound)power*=1+gear.allRound;
     if(gear.bossDamage && isEnemyTarget && target.boss)power*=1+gear.bossDamage;
     if(bonusOnDebuff&&Object.keys(target.status||{}).some(k=>k!=='buffs'))power+=bonusOnDebuff;
@@ -1265,15 +1355,29 @@
     let damage=Math.max(1,Math.floor(offensive*power-effectiveDefenderDef(target,isEnemyTarget)*.52+rng(-3,4)));
     if(isEnemyTarget&&target.metal&&Math.random()<.34)damage=0;
     const criticalChance=(hasPassive(attackerId,'crit_up')?.14:0) + Number(gear.criticalRate||0);
-    if(Math.random()<criticalChance){damage=Math.floor(damage*1.45); battleLog(`${getDef(attackerId).short}の会心！`);}
+    if(Math.random()<criticalChance){damage=Math.floor(damage*(1.45 + Number(gear.criticalDamage || 0))); battleLog(`${getDef(attackerId).short}の会心！`);}
     applyDamage(target,damage,isEnemyTarget);return damage;
   }
-  function applyDamage(target,damage,isEnemy){if(isEnemy){target.hp=Math.max(0,target.hp-damage);return;}let targetId=target;const ch=getChar(targetId);const protectedBy=ch.protectedBy;if(protectedBy&&protectedBy!==targetId&&getChar(protectedBy)?.hp>0){targetId=protectedBy;battleLog(`${getDef(protectedBy).short}が攻撃を受け止めた！`);}const defender=getChar(targetId); if(defender.cloneTurns && Math.random()<.35){ battleLog(`${getDef(targetId).short}の分身が攻撃をかわした！`); return; } let final=damage;if(defender.barrier){const used=Math.min(defender.barrier,final);defender.barrier-=used;final-=used;if(defender.barrier<=0)delete defender.barrier;}if(defender.guard)final=Math.max(1,Math.floor(final*.5));if(protectedBy&&hasPassive(protectedBy,'guard_reduction'))final=Math.max(1,Math.floor(final*.85)); const gearCut=getEquipmentSpecials(targetId).damageCut||0; if(gearCut)final=Math.max(1,Math.floor(final*(1-gearCut)));if(final>=defender.hp&&defender.deathGuard){defender.hp=1;delete defender.deathGuard;battleLog(`${getDef(targetId).short}は結界に守られた！`);}else defender.hp=Math.max(0,defender.hp-final);}
-  function executeAttack(actorId,enemy){const dmg=dealDamage(actorId,enemy,1,'physical',true);audio.sfx('hit');battleLog(`${getDef(actorId).short}の攻撃！ ${enemy.name}に${dmg}ダメージ。`);resolveAfterHit();}
+  function applyDamage(target,damage,isEnemy){
+    if(isEnemy){target.hp=Math.max(0,target.hp-damage);return;}
+    let targetId=target;const ch=getChar(targetId);const protectedBy=ch.protectedBy;
+    if(protectedBy&&protectedBy!==targetId&&getChar(protectedBy)?.hp>0){targetId=protectedBy;battleLog(`${getDef(protectedBy).short}が攻撃を受け止めた！`);}
+    const defender=getChar(targetId); const gear=getEquipmentSpecials(targetId);
+    if(defender.cloneTurns && Math.random()<.35){ battleLog(`${getDef(targetId).short}の分身が攻撃をかわした！`); audio.sfx('evade'); return; }
+    let final=damage;
+    if(defender.barrier){const used=Math.min(defender.barrier,final);defender.barrier-=used;final-=used;if(defender.barrier<=0)delete defender.barrier;}
+    if(defender.guard)final=Math.max(1,Math.floor(final*.5));
+    if(protectedBy&&hasPassive(protectedBy,'guard_reduction'))final=Math.max(1,Math.floor(final*.85));
+    if(protectedBy&&getEquipmentSpecials(protectedBy).guardPower)final=Math.max(1,Math.floor(final*(1-getEquipmentSpecials(protectedBy).guardPower)));
+    const gearCut=gear.damageCut||0; if(gearCut)final=Math.max(1,Math.floor(final*(1-gearCut)));
+    if(final>=defender.hp&&defender.deathGuard){defender.hp=1;delete defender.deathGuard;battleLog(`${getDef(targetId).short}は結界に守られた！`);audio.sfx('barrier');}
+    else { defender.hp=Math.max(0,defender.hp-final); if(final>0)audio.sfx('damage'); }
+  }
+  function executeAttack(actorId,enemy){const dmg=dealDamage(actorId,enemy,1,'physical',true);audio.sfx('attack');battleLog(`${getDef(actorId).short}の攻撃！ ${enemy.name}に${dmg}ダメージ。`);resolveAfterHit();}
   function executeSkill(actorId,skill,target) {
     const actor=getChar(actorId); const mpCost=skillMpCost(actorId,skill); if(actor.mp<mpCost) return; actor.mp-=mpCost;
     const scale=masteryScale(actorId,skill); const dur=scale.durationBonus+(hasPassive(actorId,'duration_plus')?1:0); const power=(skill.power||0)*scale.potency;
-    const gear=getEquipmentSpecials(actorId); const allRound=gear.allRound||0; const heal=(skill.heal||0)*scale.potency*(1+(gear.healRate||0)+allRound); const barrier=(skill.barrier||0)*(1+(scale.level-1)*.07)*(scale.max?1.18:1)*(1+allRound);
+    const gear=getEquipmentSpecials(actorId); const allRound=gear.allRound||0; const heal=(skill.heal||0)*scale.potency*(1+(gear.healRate||0)+allRound); const barrier=(skill.barrier||0)*(1+(scale.level-1)*.07)*(scale.max?1.18:1)*(1+allRound+(gear.barrierRate||0));
     const regen=(skill.regen||0)+(scale.level>=6?1:0)+(scale.max?1:0); const b=state.battle; b.usedSkills ||= {}; b.usedSkills[actorId] ||= {}; b.usedSkills[actorId][skill.id]=true;
     let targetEnemies=[]; if(skill.target==='enemy'&&target) targetEnemies=[target]; else if(skill.target==='allEnemies') targetEnemies=getAliveEnemies();
     const hitOne=(e,mult=power)=>{ const dmg=dealDamage(actorId,e,mult,skill.kind,true,skill.bonusOnDebuff||0,{pierce:skill.pierce,execute:skill.execute}); battleLog(`${getDef(actorId).short}の${skill.name}！ ${e.name}に${dmg}ダメージ。`); return dmg; };
@@ -1301,14 +1405,34 @@
     if(skill.lifeSteal&&targetEnemies.length){const recovered=Math.floor((skill.power||1)*combatStat(actorId,skill.kind==='physical'?'atk':'mag')*skill.lifeSteal*.55);actor.hp=clamp(actor.hp+recovered,0,getStats(actorId).maxHp);} if(skill.mpSteal)actor.mp=clamp(actor.mp+Math.floor(getStats(actorId).maxMp*skill.mpSteal),0,getStats(actorId).maxMp);
     if(skill.extraActions){ b.extraTurns ||= {}; b.extraTurns[actorId]=(b.extraTurns[actorId]||0)+skill.extraActions; }
     if(skill.allInOne){getAliveEnemies().forEach(e=>hitOne(e,power));['rainbow','white','black'].forEach(id=>{const ch=getChar(id);ch.hp=clamp(ch.hp+Math.floor(getStats(id).maxHp*heal),0,getStats(id).maxHp);});}
-    if(['physical','magic','special'].includes(skill.kind)){if(hasPassive(actorId,'fracture_chance')&&Math.random()<.2)targetEnemies.forEach(e=>setStatus(e,'fracture',1));audio.sfx('hit');}else audio.sfx('heal');
+    if(['physical','magic','special'].includes(skill.kind)){
+      if(hasPassive(actorId,'fracture_chance')&&Math.random()<.2)targetEnemies.forEach(e=>setStatus(e,'fracture',1));
+      audio.sfx(skill.kind==='physical'?'attack':'magic');
+    } else if(skill.debuff && !skill.heal && !skill.buffs && !skill.barrier) audio.sfx('debuff');
+    else if(skill.heal || skill.regen || skill.mpHeal) audio.sfx('heal');
+    else audio.sfx('buff');
     if(hasPassive(actorId,'skill_cycle')){actor.hp=clamp(actor.hp+Math.floor(getStats(actorId).maxHp*.02),0,getStats(actorId).maxHp);actor.mp=clamp(actor.mp+Math.floor(getStats(actorId).maxMp*.02),0,getStats(actorId).maxMp);} gainMastery(actorId,skill); battleLog(`${getDef(actorId).short}は ${skill.name} を使った。`); resolveAfterHit();
   }
 
-  function executeItem(actorId,itemId,targetId){const item=D.ITEM_DEFS[itemId];if(!takeItem(itemId,1))return;const target=getChar(targetId);if(item.effect.reviveHpRate&&target.hp<=0)target.hp=Math.max(1,Math.floor(getStats(targetId).maxHp*item.effect.reviveHpRate));if(item.effect.healHp)target.hp=clamp(target.hp+item.effect.healHp,0,getStats(targetId).maxHp);if(item.effect.healMp)target.mp=clamp(target.mp+item.effect.healMp,0,getStats(targetId).maxMp);if(item.effect.barrierRate)applyBarrier(targetId,item.effect.barrierRate);if(item.effect.restoreStamina)restoreStamina(item.effect.restoreStamina, `${item.name}でスタミナを回復した。`, { allowOvercap: !!item.effect.allowOvercap });audio.sfx('heal');battleLog(`${getDef(actorId).short}は ${item.name} を使った。`);resolveAfterHit();}
+  function executeItem(actorId,itemId,targetId,autoKey=''){
+    const item=D.ITEM_DEFS[itemId]; if(!item||!takeItem(itemId,1))return;
+    const target=getChar(targetId); const gear=getEquipmentSpecials(targetId); const itemRate=1+(gear.itemHealRate||0);
+    if(item.effect.reviveHpRate&&target.hp<=0)target.hp=Math.max(1,Math.floor(getStats(targetId).maxHp*item.effect.reviveHpRate*itemRate));
+    if(item.effect.healHp)target.hp=clamp(target.hp+Math.floor(item.effect.healHp*itemRate),0,getStats(targetId).maxHp);
+    if(item.effect.healMp)target.mp=clamp(target.mp+Math.floor(item.effect.healMp*itemRate),0,getStats(targetId).maxMp);
+    if(item.effect.cure){target.status ||= {}; delete target.status[item.effect.cure];}
+    if(item.effect.barrierRate)applyBarrier(targetId,item.effect.barrierRate*(1+(gear.barrierRate||0)));
+    if(item.effect.restoreStamina)restoreStamina(item.effect.restoreStamina, `${item.name}でスタミナを回復した。`, { allowOvercap: !!item.effect.allowOvercap });
+    if(autoKey) markAutoItem(autoKey);
+    audio.sfx(item.effect.barrierRate?'barrier':'heal');
+    battleLog(`${getDef(actorId).short}は ${item.name} を使った。道具は行動を消費しない。`);
+    const b=state.battle; if(!b)return;
+    b.selected=null; b.phase='command';
+    if(b.auto) { render(); window.setTimeout(runAutoTurn,110); } else render();
+  }
   function resolveAfterHit(){if(getAliveEnemies().length===0)return finishBattle(true);afterPlayerAction();}
   function afterPlayerAction(){const b=state.battle;const justActed=b.order[b.turnIndex];b.selected=null;if(b.extraTurns?.[justActed]>0){b.extraTurns[justActed]-=1;b.phase='command';battleLog(`${getDef(justActed).short}は追加行動を得た！`);render();if(b.auto)window.setTimeout(runAutoTurn,180);return;}b.turnIndex+=1;while(b.turnIndex<b.order.length&&getChar(b.order[b.turnIndex]).hp<=0)b.turnIndex+=1;if(b.turnIndex>=b.order.length){b.phase='enemy';render();window.setTimeout(enemyPhase,b.auto?300:520);}else{b.phase='command';render();if(b.auto)window.setTimeout(runAutoTurn,260);}}
-  function enemyPhase(){const b=state.battle;if(!b)return;for(const enemy of getAliveEnemies()){if(enemy.status?.bind&&Math.random()<.55){battleLog(`${enemy.name}は拘束され、動けない！`);continue;}const targets=getAliveAllies();if(!targets.length)return finishBattle(false);const targetId=choice(targets);const move=enemy.status?.silence?enemy.skills[0]:choice(enemy.skills);const base=Math.max(1,Math.floor(enemyAttackValue(enemy)*move.power-effectiveDefenderDef(targetId,false)*.45+rng(-2,4)));applyDamage(targetId,base,false);if(move.effect==='fracture'){getChar(targetId).status||={};getChar(targetId).status.fracture=2;}battleLog(`${enemy.name}の${move.name}！ ${getDef(targetId).short}に${base}ダメージ。`);if(!getAliveAllies().length)return finishBattle(false);}tickBattleStatuses();b.turnIndex=0;while(b.turnIndex<b.order.length&&getChar(b.order[b.turnIndex]).hp<=0)b.turnIndex+=1;b.phase='command';render();if(b.auto)window.setTimeout(runAutoTurn,260);}
+  function enemyPhase(){const b=state.battle;if(!b)return;for(const enemy of getAliveEnemies()){if(enemy.status?.bind&&Math.random()<.55){battleLog(`${enemy.name}は拘束され、動けない！`);continue;}const targets=getAliveAllies();if(!targets.length)return finishBattle(false);const targetId=choice(targets);const move=enemy.status?.silence?enemy.skills[0]:choice(enemy.skills);const base=Math.max(1,Math.floor(enemyAttackValue(enemy)*move.power-effectiveDefenderDef(targetId,false)*.45+rng(-2,4)));applyDamage(targetId,base,false);if(move.effect==='fracture'){const resist=getEquipmentSpecials(targetId).statusResist||0;if(Math.random()>=resist){getChar(targetId).status||={};getChar(targetId).status.fracture=2;audio.sfx('debuff');}else battleLog(`${getDef(targetId).short}は装備効果で弱体を防いだ！`);}battleLog(`${enemy.name}の${move.name}！ ${getDef(targetId).short}に${base}ダメージ。`);if(!getAliveAllies().length)return finishBattle(false);}tickBattleStatuses();b.turnIndex=0;while(b.turnIndex<b.order.length&&getChar(b.order[b.turnIndex]).hp<=0)b.turnIndex+=1;b.phase='command';render();if(b.auto)window.setTimeout(runAutoTurn,260);}
   function tickBattleStatuses(){state.battle.enemies.forEach(e=>{if(e.status?.poison){const dot=Math.max(1,Math.floor(e.maxHp*.035));e.hp=Math.max(0,e.hp-dot);battleLog(`${e.name}は侵食で${dot}ダメージ。`);}Object.keys(e.status||{}).forEach(k=>{if(k!=='buffs'){e.status[k]-=1;if(e.status[k]<=0)delete e.status[k];}});});['rainbow','white','black'].forEach(id=>{const ch=getChar(id);if(ch.guard)delete ch.guard;if(ch.cloneTurns){ch.cloneTurns-=1;if(ch.cloneTurns<=0)delete ch.cloneTurns;}if(ch.regen){ch.hp=clamp(ch.hp+Math.floor(getStats(id).maxHp*.04),0,getStats(id).maxHp);ch.regen-=1;if(ch.regen<=0)delete ch.regen;}if(ch.status){Object.keys(ch.status).forEach(k=>{if(k==='buffs'){Object.keys(ch.status.buffs).forEach(stat=>{ch.status.buffs[stat].turns-=1;if(ch.status.buffs[stat].turns<=0)delete ch.status.buffs[stat];});}else{ch.status[k]-=1;if(ch.status[k]<=0)delete ch.status[k];}});}if(ch.protectedTurns){ch.protectedTurns-=1;if(ch.protectedTurns<=0){delete ch.protectedTurns;delete ch.protectedBy;}}});}
   function applyDefeatPenalty(title, text, locationId, fromAuto=false) {
     window.clearTimeout(autoExploreTimer);
@@ -1458,7 +1582,7 @@
     const region = currentRegionId(); const regionDef = D.REGIONS?.[region] || {name:'この地方'}; const stock = D.REGION_SHOPS?.[region] || [];
     const items = stock.map((id) => D.ITEM_DEFS[id]).filter(Boolean).filter((entry) => entry.buy && (!entry.minLevel || rankAllowed(String(entry.minLevel))));
     const equipment = stock.map((id) => D.EQUIPMENT_DEFS[id]).filter(Boolean).filter((entry) => entry.price && (!entry.minLevel || rankAllowed(String(entry.minLevel))));
-    const itemRows = items.length ? items.map((entry)=>`<div class="list-row"><span class="badge">${entry.effect?.restoreStamina ? '活力' : '道具'}</span><div class="row-main"><strong>${entry.name}</strong><div class="meta">${entry.description}</div></div><div><div class="value">${entry.buy}G</div><button class="small-button" data-action="buy-item" data-id="${entry.id}" ${state.gold < entry.buy?'disabled':''}>買う</button></div></div>`).join('') : '<div class="empty-state">この地方では現在購入できる道具がありません。</div>';
+    const itemRows = items.length ? items.map((entry)=>`<div class="list-row"><span class="badge">${entry.effect?.restoreStamina ? '活力' : '道具'}</span><div class="row-main"><strong>${entry.name}</strong><div class="meta">${entry.description}</div><div class="meta">1個 ${entry.buy}G</div></div><div class="quantity-control"><input id="shopQty_${entry.id}" class="qty-input" type="number" min="1" max="99" value="1" aria-label="${entry.name}の購入数"><button class="small-button" data-action="buy-item" data-id="${entry.id}" data-qty-input="shopQty_${entry.id}" ${state.gold < entry.buy?'disabled':''}>買う</button></div></div>`).join('') : '<div class="empty-state">この地方では現在購入できる道具がありません。</div>';
     const groupName = (e) => e.slot==='rightHand'||e.slot==='leftHand'?'武器・盾':e.slot==='accessory'?'装飾品':'防具';
     const groups = ['武器・盾','防具','装飾品'].map((g)=>[g,equipment.filter((e)=>groupName(e)===g)]);
     const eqRows = groups.map(([g,list])=>`<h3 style="margin-top:18px;">${g}</h3>${list.length?`<div class="list">${list.map((entry)=>{const owned=state.ownedEquipment?.includes(entry.id); const hand=entry.handType==='twoHand'?'両手':entry.handType==='twoHandShield'?'両手盾':entry.handType==='shield'?'片手盾':entry.weaponType?'片手武器':''; return `<div class="list-row"><span class="badge">${hand || (entry.slot==='accessory'?'装飾':EQUIP_SLOT_LABELS[entry.slot])}</span><div class="row-main"><strong>${entry.name}${entry.allowed!=='all'?'（専用）':''}</strong><div class="meta">${entry.description}</div><div class="meta">${equipmentStatText(entry)}</div></div><div><div class="value">${entry.price}G</div><button class="small-button" data-action="buy-equipment" data-id="${entry.id}" ${owned || state.gold < entry.price?'disabled':''}>${owned?'所持済':'買う'}</button></div></div>`;}).join('')}</div>`:'<div class="empty-state">このジャンルの取り扱いはありません。</div>'}`).join('');
@@ -1470,16 +1594,21 @@
     const recipes = Object.values(D.RECIPES).filter((r) => (r.region || 'lindholm') === region).filter((r) => r.output?.type !== 'equipment' || D.EQUIPMENT_DEFS[r.output.id]).sort((a,b)=>(a.minLevel||1)-(b.minLevel||1)||a.name.localeCompare(b.name,'ja'));
     const cat = (r) => r.category || (r.output.type==='equipment' ? ((D.EQUIPMENT_DEFS[r.output.id]?.slot==='rightHand'||D.EQUIPMENT_DEFS[r.output.id]?.slot==='leftHand')?'武器・盾':D.EQUIPMENT_DEFS[r.output.id]?.slot==='accessory'?'装飾品':'防具') : '道具');
     const cats=[...new Set(recipes.map(cat))];
-    const outputRows=(list)=>list.map((r)=>{const complete=r.output.type==='equipment'&&state.ownedEquipment?.includes(r.output.id);const levelOk=!r.minLevel||rankAllowed(String(r.minLevel));const outEquip=r.output.type==='equipment'?D.EQUIPMENT_DEFS[r.output.id]:null;return `<div class="list-row"><span class="badge ${levelOk?'':'locked'}">${cat(r)}</span><div class="row-main"><strong>${r.name}${complete?'（所持済）':''}</strong><div class="meta">${r.description}</div><div class="meta">${r.minLevel?`必要：冒険者Lv.${r.minLevel}　／　`:''}材料：${r.ingredients.map((ing)=>`${D.ITEM_DEFS[ing.id]?.name || ing.id} ${countItem(ing.id)}/${ing.qty}`).join('　')}</div>${outEquip?`<div class="meta">${equipmentStatText(outEquip)}</div>`:''}</div><button class="small-button" data-action="craft" data-id="${r.id}" ${!canCraft(r)?'disabled':''}>${complete?'所持済':levelOk?'作る':`Lv.${r.minLevel}必要`}</button></div>`;}).join('');
+    const outputRows=(list)=>list.map((r)=>{
+      const complete=r.output.type==='equipment'&&state.ownedEquipment?.includes(r.output.id);
+      const levelOk=!r.minLevel||rankAllowed(String(r.minLevel));
+      const outEquip=r.output.type==='equipment'?D.EQUIPMENT_DEFS[r.output.id]:null;
+      const isStackable=r.output.type==='item';
+      const qtyControl=isStackable?`<input id="craftQty_${r.id}" class="qty-input" type="number" min="1" max="99" value="1" aria-label="${r.name}の製造数">`:'';
+      return `<div class="list-row"><span class="badge ${levelOk?'':'locked'}">${cat(r)}</span><div class="row-main"><strong>${r.name}${complete?'（所持済）':''}</strong><div class="meta">${r.description}</div><div class="meta">${r.minLevel?`必要：冒険者Lv.${r.minLevel}　／　`:''}材料：${r.ingredients.map((ing)=>`${D.ITEM_DEFS[ing.id]?.name || ing.id} ${countItem(ing.id)}/${ing.qty}`).join('　')}</div>${outEquip?`<div class="meta">${equipmentStatText(outEquip)}</div>`:''}</div><div class="quantity-control">${qtyControl}<button class="small-button" data-action="craft" data-id="${r.id}" ${isStackable?`data-qty-input="craftQty_${r.id}"`:''} ${!canCraft(r)?'disabled':''}>${complete?'所持済':levelOk?'作る':`Lv.${r.minLevel}必要`}</button></div></div>`;
+    }).join('');
     showModal(`<div class="modal-header"><div><h2>${regionDef.name}の製造所</h2><p>地方ごとの素材から、ジャンル別に道具・武器・防具・装飾を製造します。</p></div><button class="modal-close" data-action="modal-close">×</button></div>${cats.map((c)=>`<h3 style="margin-top:16px">${c}</h3><div class="list">${outputRows(recipes.filter(r=>cat(r)===c))}</div>`).join('')}`);
   }
 
   function showInn() {
-    showModal(`<div class="modal-header"><div><h2>宿屋《風見鶏》</h2><p>20Gで三人のHP・MPと、パーティのスタミナを全回復します。</p></div><button class="modal-close" data-action="modal-close">×</button></div><div class="card"><div class="meter-label"><span>スタミナ ${formatStamina(state.stamina.current)}/${getStaminaMax()}</span><span>宿泊後 ${getStaminaMax()}/${getStaminaMax()}</span></div><div class="meter stamina"><span style="width:${pct(state.stamina.current,getStaminaMax())}%"></span></div><p class="dialogue-text">白零「今日は、休みましょう。明日も歩くために。」
-
-虹全「賛成。温かいものも食べたい。」
-
-黒零「……眠れるなら、それでいい。」</p><div class="modal-footer"><button class="secondary-button" data-action="modal-close">戻る</button><button class="primary-button" data-action="rest" ${state.gold<20?'disabled':''}>20Gで泊まる</button></div></div>`);
+    const cost = innCost(); const level = getRank().level;
+    showModal(`<div class="modal-header"><div><h2>宿屋《風見鶏》</h2><p>冒険者Lvに応じて宿泊料が変わります。現在 Lv.${level}：<b style="color:var(--gold)">${cost}G</b></p></div><button class="modal-close" data-action="modal-close">×</button></div><div class="card"><div class="meter-label"><span>スタミナ ${formatStamina(state.stamina.current)}/${getStaminaMax()}</span><span>宿泊後 ${getStaminaMax()}/${getStaminaMax()}</span></div><div class="meter stamina"><span style="width:${pct(state.stamina.current,getStaminaMax())}%"></span></div><p class="dialogue-text">白零「今日は、休みましょう。明日も歩くために。」
+黒零「……眠れるなら、それでいい。」</p><div class="trait-box"><b>宿泊料の目安</b><br>冒険者レベルが上がるほど、消耗品補給・食事・寝具を含む滞在費が上昇します。現在の料金：${cost}G。</div><div class="modal-footer"><button class="secondary-button" data-action="modal-close">戻る</button><button class="primary-button" data-action="rest" ${state.gold<cost?'disabled':''}>${cost}Gで泊まる</button></div></div>`);
   }
 
   function showSell() {
@@ -1545,13 +1674,13 @@
   }
 
   function showUpdateReport() {
-    showModal(`<div class="modal-header"><div><h2>v0.8 十地方・食堂・キークエスト更新報告</h2><p>Lv.100までの冒険者成長、十地方の旅、地方料理、左右手装備、物語進行をまとめた大規模更新です。</p></div><button class="modal-close" data-action="modal-close">×</button></div>
+    showModal(`<div class="modal-header"><div><h2>v0.9 戦闘・自動化・経済バランス更新報告</h2><p>両手装備の排他、成長速度、戦闘道具、価格と報酬を再調整した更新です。</p></div><button class="modal-close" data-action="modal-close">×</button></div>
       <div class="report-grid">
-        <section class="report-section"><h3>◆ ボリューム</h3><ul><li>地方10／町10／探索地36</li><li>依頼148（キークエスト10・繰り返し71）</li><li>敵61（レア・メタル・ゴールド・ボス含む）</li><li>装備205／製造114／技99／料理100</li></ul></section>
-        <section class="report-section"><h3>◆ ストーリー</h3><ul><li>地方ごとにキークエストを設置</li><li>レベル＋前章達成で次地方を解放</li><li>原初境界でテリオス系統を解放</li><li>キークエスト個別報告時に会話を表示</li></ul></section>
-        <section class="report-section"><h3>◆ 食堂と装備</h3><ul><li>各地方の食堂に10料理</li><li>時間制限つき能力上昇・特殊バフ</li><li>頭・体・腕・足・右手・左手・装飾2枠</li><li>片手／両手武器・盾、地方固有の専用紋章</li></ul></section>
-        <section class="report-section"><h3>◆ 戦闘と周回</h3><ul><li>多段・ランダム・ためる・分身・追加行動</li><li>未使用技にも戦闘後の習熟経験</li><li>地域ごとの敵・素材・製造・ショップを分離</li><li>料理・装備の特殊効果が探索と戦闘へ反映</li></ul></section>
-      </div><p class="note">今回は「地方ごとの遊び分け」「食堂・装備の選択」「キークエストの導線」「後半の育成要求」を重点的に確認してください。</p><div class="modal-footer"><button class="primary-button" data-action="modal-close">確認した</button></div>`);
+        <section class="report-section"><h3>◆ 装備と経済</h3><ul><li>両手武器・両手盾は左手を完全に使用不可へ修正</li><li>旧セーブも読込時に矛盾した左手装備を自動解除</li><li>全装備の性能・特殊効果・価格帯を再調整</li><li>ショップと製造で消耗品の個数指定に対応</li><li>宿屋料金は冒険者Lvに連動して上昇</li></ul></section>
+        <section class="report-section"><h3>◆ 成長と難易度</h3><ul><li>繰り返し依頼の冒険者経験を大幅に抑制</li><li>敵のHP・攻防・報酬経験を再配分</li><li>装備・料理・パネルを組み合わせる前提の戦闘へ調整</li><li>通常戦はおおむね4〜5行動程度を目安に再設計</li></ul></section>
+        <section class="report-section"><h3>◆ 戦闘とオート</h3><ul><li>戦闘中の道具はターンを消費しない</li><li>オート戦闘でHP・MP・蘇生・結界道具を使用</li><li>オート探索では活力剤も共通設定から使用</li><li>一戦・一周ごとの自動使用上限を細かく設定可能</li></ul></section>
+        <section class="report-section"><h3>◆ 音と安全性</h3><ul><li>攻撃・魔法・被弾・回復・強化・弱体の効果音を追加</li><li>保存データの正規化を強化し、壊れた装備状態を修復</li><li>数値入力は上限・下限を固定して不正な個数を抑制</li><li>v0.8セーブから移行可能</li></ul></section>
+      </div><p class="note">メニューの「オート設定」から、回復薬・蘇生薬・活力剤の種類、使用条件、使用数を変更できます。</p><div class="modal-footer"><button class="primary-button" data-action="modal-close">確認した</button></div>`);
   }
 
   function showStoryLog() {
@@ -1562,9 +1691,76 @@
     showModal(`<div class="modal-header"><div><h2>旅の記録</h2><p>キークエストで明らかになった、三人と世界の記録。</p></div><button class="modal-close" data-action="modal-close">×</button></div>${entries ? `<div class="list">${entries}</div>` : '<div class="empty-state">まだキークエストを達成していません。</div>'}`);
   }
 
+
+  function automationItemOptions(predicate, selectedId) {
+    const options = Object.values(D.ITEM_DEFS || {}).filter((item) => item?.effect && predicate(item)).sort((a,b) => (a.buy || 0) - (b.buy || 0));
+    return options.map((item) => `<option value="${item.id}" ${item.id === selectedId ? 'selected' : ''}>${escapeHtml(item.name)}（所持 ${countItem(item.id)}）</option>`).join('') || '<option value="">該当する道具がありません</option>';
+  }
+
+  function showAutomationSettings() {
+    const p = getAutoPolicy();
+    const yes = (value) => value ? 'checked' : '';
+    const clampInput = (value, min, max) => clamp(Number(value) || min, min, max);
+    showModal(`<div class="modal-header"><div><h2>オート道具設定</h2><p>自動戦闘とオート探索が使う道具・残量条件・一戦／一周あたりの上限を共通で設定します。</p></div><button class="modal-close" data-action="modal-close">×</button></div>
+      <div class="automation-settings-grid">
+        <section class="setting-group"><h3>自動戦闘の回復・蘇生</h3>
+          <label class="toggle-row"><input id="autoItemEnabled" type="checkbox" ${yes(p.enabled)}>自動戦闘で道具を使う</label>
+          <label>HP回復を開始するHP%<input id="autoHpThreshold" type="number" min="1" max="95" value="${clampInput(p.hpThreshold,1,95)}"></label>
+          <label>使うHP回復道具<select id="autoHealingItem">${automationItemOptions((item) => !!item.effect.healHp, p.healingItemId)}</select></label>
+          <label>一戦で使う最大数<input id="autoHealLimit" type="number" min="0" max="99" value="${clampInput(p.maxHealPerBattle,0,99)}"></label>
+          <label>MP回復を開始するMP%<input id="autoMpThreshold" type="number" min="1" max="95" value="${clampInput(p.mpThreshold,1,95)}"></label>
+          <label>使うMP回復道具<select id="autoManaItem">${automationItemOptions((item) => !!item.effect.healMp, p.manaItemId)}</select></label>
+          <label>一戦で使う最大数<input id="autoManaLimit" type="number" min="0" max="99" value="${clampInput(p.maxManaPerBattle,0,99)}"></label>
+          <label class="toggle-row"><input id="autoReviveEnabled" type="checkbox" ${yes(p.reviveEnabled)}>戦闘不能時に自動で蘇生する</label>
+          <label>使う蘇生道具<select id="autoReviveItem">${automationItemOptions((item) => !!item.effect.reviveHpRate, p.reviveItemId)}</select></label>
+          <label>一戦で使う最大数<input id="autoReviveLimit" type="number" min="0" max="99" value="${clampInput(p.maxRevivePerBattle,0,99)}"></label>
+        </section>
+        <section class="setting-group"><h3>防御道具・オート探索</h3>
+          <label>結界を張るHP%<input id="autoBarrierThreshold" type="number" min="1" max="95" value="${clampInput(p.barrierThreshold,1,95)}"></label>
+          <label>使う結界道具<select id="autoBarrierItem">${automationItemOptions((item) => !!item.effect.barrierRate, p.barrierItemId)}</select></label>
+          <label>一戦で使う最大数<input id="autoBarrierLimit" type="number" min="0" max="99" value="${clampInput(p.maxBarrierPerBattle,0,99)}"></label>
+          <div class="setting-divider"></div>
+          <label class="toggle-row"><input id="autoUseDuringExplore" type="checkbox" ${yes(p.useDuringAutoExplore)}>オート探索中の戦闘でも上記設定を使う</label>
+          <label class="toggle-row"><input id="autoStaminaEnabled" type="checkbox" ${yes(p.staminaEnabled)}>スタミナ不足時に活力剤を自動使用する</label>
+          <label>使う活力剤<select id="autoStaminaItem">${automationItemOptions((item) => !!item.effect.restoreStamina, p.staminaItemId)}</select></label>
+          <label>一周で使う最大数<input id="autoStaminaLimit" type="number" min="0" max="99" value="${clampInput(p.maxStaminaPerRun,0,99)}"></label>
+          <p class="note">道具は戦闘ターンを消費しません。HP・MP・蘇生・結界を設定した上限まで自動使用してから、技や通常攻撃を選びます。</p>
+        </section>
+      </div>
+      <div class="modal-footer"><button class="secondary-button" data-action="modal-close">戻る</button><button class="primary-button" data-action="save-automation-settings">設定を保存</button></div>`);
+  }
+
+  function saveAutomationSettings() {
+    const read = (id, fallback='') => document.getElementById(id)?.value ?? fallback;
+    const checked = (id) => !!document.getElementById(id)?.checked;
+    const number = (id, min=0, max=99) => clamp(Math.floor(Number(read(id, min)) || 0), min, max);
+    const p = getAutoPolicy();
+    p.enabled = checked('autoItemEnabled');
+    p.useDuringAutoExplore = checked('autoUseDuringExplore');
+    p.hpThreshold = number('autoHpThreshold', 1, 95);
+    p.mpThreshold = number('autoMpThreshold', 1, 95);
+    p.barrierThreshold = number('autoBarrierThreshold', 1, 95);
+    p.healingItemId = read('autoHealingItem', p.healingItemId);
+    p.manaItemId = read('autoManaItem', p.manaItemId);
+    p.reviveEnabled = checked('autoReviveEnabled');
+    p.reviveItemId = read('autoReviveItem', p.reviveItemId);
+    p.barrierItemId = read('autoBarrierItem', p.barrierItemId);
+    p.maxHealPerBattle = number('autoHealLimit');
+    p.maxManaPerBattle = number('autoManaLimit');
+    p.maxRevivePerBattle = number('autoReviveLimit');
+    p.maxBarrierPerBattle = number('autoBarrierLimit');
+    p.staminaEnabled = checked('autoStaminaEnabled');
+    p.staminaItemId = read('autoStaminaItem', p.staminaItemId);
+    p.maxStaminaPerRun = number('autoStaminaLimit');
+    saveGame();
+    toast('オート道具設定を保存しました。', 'good');
+    closeModal();
+  }
+
   function showSystemMenu() {
     const audioState = state.audio.music ? 'オン' : 'オフ';
-    showModal(`<div class="modal-header"><div><h2>メニュー</h2><p>この試作版はブラウザの保存領域に自動セーブします。</p></div><button class="modal-close" data-action="modal-close">×</button></div><div class="list"><button class="list-row" data-action="open-report"><span class="badge active">v0.8</span><span class="row-main"><strong>今回の更新報告</strong><span class="meta">十地方・食堂・左右手装備・キークエストの変更点を確認する。</span></span></button><button class="list-row" data-action="open-story-log"><span class="badge">記録</span><span class="row-main"><strong>旅の記録</strong><span class="meta">キークエストで判明した世界と三人の物語を読み返す。</span></span></button><button class="list-row" data-action="toggle-audio"><span class="badge">音楽</span><span class="row-main"><strong>BGM：${audioState}</strong><span class="meta">地方・戦闘に応じたチップ・アンビエントBGMを切り替える。</span></span></button><button class="list-row" data-action="save"><span class="badge">保存</span><span class="row-main"><strong>今すぐセーブ</strong><span class="meta">現在の進行・パネル・習熟度をブラウザに保存する。</span></span></button><button class="list-row" data-action="reset-confirm"><span class="badge locked">初期化</span><span class="row-main"><strong>最初からやり直す</strong><span class="meta">セーブデータを初期状態に戻す。</span></span></button></div><div class="audio-note">スマホでは、最初のタップ後に音が鳴ります。音楽は外部素材を使わないゲーム内生成音です。</div>`);
+    const p = getAutoPolicy();
+    showModal(`<div class="modal-header"><div><h2>メニュー</h2><p>この試作版はブラウザの保存領域に自動セーブします。</p></div><button class="modal-close" data-action="modal-close">×</button></div><div class="list"><button class="list-row" data-action="open-report"><span class="badge active">v0.9</span><span class="row-main"><strong>今回の更新報告</strong><span class="meta">戦闘道具・両手装備・成長速度・価格調整の変更点を確認する。</span></span></button><button class="list-row" data-action="open-automation-settings"><span class="badge">AUTO</span><span class="row-main"><strong>オート道具設定</strong><span class="meta">戦闘：${p.enabled ? '道具を使う' : '道具を使わない'}／探索：${p.staminaEnabled ? '活力剤あり' : '活力剤なし'}</span></span></button><button class="list-row" data-action="open-story-log"><span class="badge">記録</span><span class="row-main"><strong>旅の記録</strong><span class="meta">キークエストで判明した世界と三人の物語を読み返す。</span></span></button><button class="list-row" data-action="toggle-audio"><span class="badge">音楽</span><span class="row-main"><strong>BGM：${audioState}</strong><span class="meta">戦闘の攻撃・魔法・被弾・回復などの効果音も切り替える。</span></span></button><button class="list-row" data-action="save"><span class="badge">保存</span><span class="row-main"><strong>今すぐセーブ</strong><span class="meta">現在の進行・パネル・習熟度・オート設定を保存する。</span></span></button><button class="list-row" data-action="reset-confirm"><span class="badge locked">初期化</span><span class="row-main"><strong>最初からやり直す</strong><span class="meta">セーブデータを初期状態に戻す。</span></span></button></div><div class="audio-note">スマホでは、最初のタップ後に音が鳴ります。音楽は外部素材を使わないゲーム内生成音です。</div>`);
   }
 
   function confirmReset() {
@@ -1816,6 +2012,8 @@
     else if (a === 'map-mode') { state.mapUi ||= {}; state.mapUi.mode=target.dataset.mode || 'region'; saveGame(); render(); }
     else if (a === 'map-select-region') { const region=D.REGIONS?.[id]; if(region && regionUnlocked(region.id)) { state.mapUi ||= {}; state.mapUi.region=id; state.mapUi.mode='region'; saveGame(); render(); } }
     else if (a === 'open-report') { showUpdateReport(); }
+    else if (a === 'open-automation-settings') { showAutomationSettings(); }
+    else if (a === 'save-automation-settings') { saveAutomationSettings(); }
     else if (a === 'open-story-log') { showStoryLog(); }
     else if (a === 'go-party') { state.scene='party'; render(); }
     else if (a === 'enter-location') enterLocation(id);
@@ -1823,7 +2021,7 @@
     else if (a === 'select-explore-difficulty') { state.explorationUi.selectedDifficulty[id] = target.dataset.difficulty; saveGame(); render(); }
     else if (a === 'auto-explore') startAutoExplore(id);
     else if (a === 'auto-explore-open') openAutoExploreSetup(id);
-    else if (a === 'auto-explore-confirm') { const floor=document.getElementById('autoStaminaFloor')?.value || 0; const tonicId=document.getElementById('autoTonicId')?.value || ''; const tonicCount=document.getElementById('autoTonicCount')?.value || 0; closeModal(); startAutoExplore(id,floor,tonicId,tonicCount); }
+    else if (a === 'auto-explore-confirm') { const floor=document.getElementById('autoStaminaFloor')?.value || 0; closeModal(); startAutoExplore(id, floor); }
     else if (a === 'cancel-auto-explore') stopAutoExplore();
     else if (a === 'facility') openFacility(id);
     else if (a === 'open-panel') { state.selectedCharacter=id; state.scene='panel'; render(); }
@@ -1843,9 +2041,9 @@
     else if (a === 'quest-tab') { state.questUi.tab = target.dataset.tab; saveGame(); render(); }
     else if (a === 'quest-complete') { const inGuild = modalLayer.classList.contains('open'); const isKey = !!D.QUESTS[id]?.key; const done = completeQuest(id, { keepView:!isKey }); if (done && !isKey) { if (inGuild) showGuild(); else render(); } }
     else if (a === 'quest-complete-all') { completeAllQuests(target.dataset.region || null, target.dataset.type || null, modalLayer.classList.contains('open') ? 'guild' : 'log'); }
-    else if (a === 'buy-item') { buyItem(id); if(modalLayer.classList.contains('open')) showShop(); }
+    else if (a === 'buy-item') { const qty = document.getElementById(target.dataset.qtyInput)?.value || 1; buyItem(id, qty); if(modalLayer.classList.contains('open')) showShop(); }
     else if (a === 'buy-equipment') { buyEquipment(id); if(modalLayer.classList.contains('open')) showShop(); }
-    else if (a === 'craft') { craft(id); if(modalLayer.classList.contains('open')) showCraft(); }
+    else if (a === 'craft') { const qty = document.getElementById(target.dataset.qtyInput)?.value || 1; craft(id, qty); if(modalLayer.classList.contains('open')) showCraft(); }
     else if (a === 'equip-craft') { equipCrafted(id); }
     else if (a === 'sell-item') { sellItem(id); if(modalLayer.classList.contains('open')) showSell(); }
     else if (a === 'rest') { closeModal(); restAtInn(); }
