@@ -1,4 +1,4 @@
-/* 全零〈オムニル〉— 星なき始まり — prototype v0.8 地方ギルド・装備拡張版 */
+/* 全零〈オムニル〉— 星なき始まり — v0.9.1 十地方・戦闘・自動化調整版 */
 (() => {
   'use strict';
 
@@ -789,7 +789,7 @@
   function renderTitle() {
     return `<section class="hero">
       <div class="hero-content">
-        <div class="hero-eyebrow">PIXEL FANTASY RPG　— REGION & EQUIPMENT BUILD v0.8 —</div>
+        <div class="hero-eyebrow">全零〈オムニル〉RPG　— 十地方・戦闘・自動化調整版 v0.9.1 —</div>
         <h1>全零〈オムニル〉<br><span class="rainbow-text">星なき始まり</span></h1>
         <p>何も持たなかった三人が、出会いと旅の中で自分の意志を見つけていく。<br>白、黒、そして虹。零から始まる、三人の物語。</p>
         <div class="button-row">
@@ -798,7 +798,7 @@
         </div>
       </div>
     </section>
-    <h2 class="section-title">v0.8で遊べること</h2>
+    <h2 class="section-title">v0.9.1で遊べること</h2>
     <div class="grid three">
       <article class="card"><h3>◫ 十地方と探索</h3><p>リンドホルムから原初境界まで十地方。町10・探索地36を、初級・中級・上級から選べる。</p></article>
       <article class="card"><h3>⚔ 戦闘と8部位装備</h3><p>3人コマンド戦闘＋AUTO対応。頭・体・腕・足・右手・左手・装飾2枠を組み、片手・両手武器と特殊効果を使い分ける。</p></article>
