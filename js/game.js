@@ -1,14 +1,14 @@
-/* 全零〈オムニル〉— 星なき始まり — prototype v0.7 地方ギルド・装備拡張版 */
+/* 全零〈オムニル〉— 星なき始まり — prototype v0.8 地方ギルド・装備拡張版 */
 (() => {
   'use strict';
 
   const D = window.OMNIL_DATA;
-  const SAVE_KEY = 'omnil_rpg_prototype_v07';
+  const SAVE_KEY = 'omnil_rpg_prototype_v08';
   const STAMINA_RECOVERY_MS = 3 * 60 * 1000;
   const AUTO_STAMINA_MULTIPLIER = 1.5;
   const STAMINA_EPSILON = 0.0001;
-  const EQUIP_SLOTS = ['head','body','arms','legs','accessory1','accessory2'];
-  const EQUIP_SLOT_LABELS = { head:'頭', body:'体', arms:'腕', legs:'足', accessory1:'装飾1', accessory2:'装飾2' };
+  const EQUIP_SLOTS = ['head','body','arms','legs','rightHand','leftHand','accessory1','accessory2'];
+  const EQUIP_SLOT_LABELS = { head:'頭', body:'体', arms:'腕', legs:'足', rightHand:'右手', leftHand:'左手', accessory1:'装飾1', accessory2:'装飾2' };
   let autoExploreTimer = null;
   const audio = window.OMNIL_AUDIO || { resume() {}, configure() {}, setTheme() {}, sfx() {}, stopAll() {} };
   const root = document.getElementById('gameRoot');
@@ -16,6 +16,8 @@
   const modalLayer = document.getElementById('modalLayer');
   const toastLayer = document.getElementById('toastLayer');
   let modalCloseCallback = null;
+  // セーブ移行中にも統計計算を行うため、TDZを避けて先に宣言する。
+  let state = null;
 
   const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
   const deepCopy = (o) => JSON.parse(JSON.stringify(o));
@@ -39,7 +41,7 @@
       };
     });
     return {
-      version: 7,
+      version: 8,
       started: false,
       scene: 'title',
       currentLocation: 'lindholm',
@@ -57,6 +59,8 @@
       mapUi: { mode: 'region', region: 'lindholm' },
       flags: { v5StarterPoints: true, v6StarterPack: true, v7EquipmentMigration: true },
       audio: { music: true, sfx: true, volume: .52 },
+      foodBuff: null,
+      storyLog: [],
       automation: { battleAutoDefault: false },
       autoExplore: null,
       characters,
@@ -72,7 +76,7 @@
     merged.inventory = { ...base.inventory, ...(candidate.inventory || {}) };
     merged.equipment = { ...base.equipment, ...(candidate.equipment || {}) };
     merged.ownedEquipment = [...new Set([...(candidate.ownedEquipment || [])])];
-    // v0.6以前の「1人1装備」セーブを、v0.7の6部位装備へ変換する。
+    // v0.6以前の「1人1装備」セーブを、v0.8の8部位装備へ変換する。
     ['rainbow','white','black'].forEach((id) => {
       const rawOldEquip = candidate?.equipment?.[id];
       const oldEquip = typeof rawOldEquip === 'string' ? (D.EQUIPMENT_DEFS[rawOldEquip] ? rawOldEquip : (D.LEGACY_EQUIPMENT_MAP?.[rawOldEquip] || rawOldEquip)) : rawOldEquip;
@@ -90,6 +94,8 @@
     });
     merged.ownedEquipment = [...new Set(merged.ownedEquipment.filter((id) => D.EQUIPMENT_DEFS[id]))];
     merged.audio = { ...base.audio, ...(candidate.audio || {}) };
+    merged.foodBuff = candidate.foodBuff || null;
+    merged.storyLog = [...(candidate.storyLog || [])];
     merged.automation = { ...base.automation, ...(candidate.automation || {}) };
     merged.flags = { ...base.flags, ...(candidate.flags || {}) };
     merged.questCompletions = { ...(candidate.questCompletions || {}) };
@@ -121,9 +127,15 @@
     }
     if (previousVersion < 7 && !candidate.flags?.v7EquipmentMigration) {
       merged.flags.v7EquipmentMigration = true;
-      merged.logs = ['v0.7移行：装備を頭・体・腕・足・装飾1・装飾2の6部位に再編しました。仲間画面から装備を整えてください。', ...(candidate.logs || [])].slice(0, 40);
+      merged.logs = ['v0.8移行：装備を頭・体・腕・足・右手・左手・装飾1・装飾2の8部位に再編しました。仲間画面から装備を整えてください。', ...(candidate.logs || [])].slice(0, 40);
     }
-    merged.version = 7;
+    if (previousVersion < 8 && !candidate.flags?.v8TenRegionMigration) {
+      merged.flags.v8TenRegionMigration = true;
+      merged.foodBuff = null;
+      merged.storyLog = [...(candidate.storyLog || [])];
+      merged.logs = ['v0.8移行：冒険者Lv.100・十地方・左右手装備・地方食堂・キークエストを追加しました。', ...(candidate.logs || [])].slice(0, 50);
+    }
+    merged.version = 8;
     merged.stamina.current = Math.max(0, Number(merged.stamina.current) || base.stamina.current);
     merged.stamina.updatedAt = Number(merged.stamina.updatedAt) || Date.now();
     merged.scene = 'title';
@@ -142,12 +154,15 @@
     }
   }
 
-  let state = loadState();
+  state = loadState();
 
   function desiredAudioTheme() {
     if (state.scene === 'title') return 'title';
     if (state.scene === 'battle') return state.battle?.enemies?.some((e)=>e.boss) ? 'boss' : 'battle';
     const locationId = state.currentLocation;
+    const regionId = D.LOCATIONS[locationId]?.region || state.mapUi?.region;
+    const regionTheme = { verdantgrove:'canopy', aurorasteppe:'sky', saltdesert:'desert', thunderplateau:'storm', abyssalcity:'abyss', originfrontier:'origin' }[regionId];
+    if (regionTheme) return regionTheme;
     if (D.LOCATIONS[locationId]?.type === 'town') return 'town';
     if (['windy_plain','brook_meadows','iron_hills'].includes(locationId)) return 'plain';
     if (['whisper_woods','moss_depths'].includes(locationId)) return 'forest';
@@ -218,6 +233,19 @@
     const requiredIndex = D.RANKS.findIndex((r) => String(r.id) === String(required));
     return requiredIndex >= 0 && getRankIndexByExp() >= requiredIndex;
   }
+  function regionUnlocked(regionId) {
+    const region = D.REGIONS?.[regionId];
+    if (!region) return false;
+    if (!rankAllowed(region.unlockRank || '1')) return false;
+    return !region.requiresQuest || state.completedQuests.includes(region.requiresQuest);
+  }
+  function regionLockText(regionId) {
+    const region = D.REGIONS?.[regionId];
+    if (!region) return '未実装';
+    if (!rankAllowed(region.unlockRank || '1')) return `要 冒険者Lv.${region.unlockRank}`;
+    if (region.requiresQuest && !state.completedQuests.includes(region.requiresQuest)) return '前章のキークエストを完了';
+    return '';
+  }
   function expToNextRank() {
     const next = D.RANKS[getRankIndexByExp() + 1];
     return next ? next.threshold : null;
@@ -256,7 +284,7 @@
     state.stamina.current = Math.max(0, state.stamina.current - actual);
     state.stamina.updatedAt = Date.now();
     appendLog(`${reason}：スタミナ -${formatStamina(actual)}`);
-    // v0.7：スタミナ0は「探索を始められない」だけ。戦闘敗北や撤退ペナルティにはしない。
+    // v0.8：スタミナ0は「探索を始められない」だけ。戦闘敗北や撤退ペナルティにはしない。
     if (state.stamina.current <= STAMINA_EPSILON) state.stamina.current = 0;
     return true;
   }
@@ -270,8 +298,29 @@
     if (restored > 0) appendLog(`${note}（+${formatStamina(restored)}）`);
     return restored;
   }
+  function getFoodBuff() {
+    const buff = state.foodBuff;
+    if (!buff) return null;
+    if (Date.now() >= Number(buff.expiresAt || 0)) { state.foodBuff = null; appendLog('食事の効果が切れた。'); return null; }
+    return buff;
+  }
+  function foodTimeLabel() {
+    const buff = getFoodBuff();
+    if (!buff) return '食事効果なし';
+    const remain = Math.max(0, Math.ceil((buff.expiresAt - Date.now()) / 60000));
+    return `${buff.name}　残り${remain}分`;
+  }
+  function getFoodEffect() { return getFoodBuff()?.effect || { stats:{}, special:{} }; }
+  function eatMeal(id) {
+    const meal = Object.values(D.MEALS || {}).flat().find((m) => m.id === id);
+    if (!meal || meal.region !== currentRegionId() || !rankAllowed(String(meal.minLevel)) || state.gold < meal.price) return false;
+    state.gold -= meal.price;
+    state.foodBuff = { id:meal.id, name:meal.name, effect:meal.effect, expiresAt:Date.now() + meal.durationMinutes * 60 * 1000 };
+    appendLog(`${meal.name}を食べた。${meal.durationMinutes}分間、食事効果が続く。`);
+    saveGame(); toast(`${meal.name}：${meal.durationMinutes}分間の食事効果を得た。`, 'good'); return true;
+  }
 
-  function emptyEquipmentLoadout() { return { head:null, body:null, arms:null, legs:null, accessory1:null, accessory2:null }; }
+  function emptyEquipmentLoadout() { return { head:null, body:null, arms:null, legs:null, rightHand:null, leftHand:null, accessory1:null, accessory2:null }; }
   function getDef(id) { return D.CHARACTER_DEFS[id]; }
   function getChar(id) { return state.characters[id]; }
   function getEquipmentLoadout(id, localState = state) {
@@ -295,6 +344,7 @@
   function getPartyEquipmentSpecials(localState = state) {
     const total = {};
     ['rainbow','white','black'].forEach((id) => Object.entries(getEquipmentSpecials(id, localState)).forEach(([key,value]) => { total[key] = (total[key] || 0) + Number(value || 0); }));
+    if (localState === state) Object.entries(getFoodEffect().special || {}).forEach(([key,value]) => { total[key] = (total[key] || 0) + Number(value || 0); });
     return total;
   }
   function ownedEquipment() { return (state.ownedEquipment || []).map((id) => D.EQUIPMENT_DEFS[id]).filter(Boolean); }
@@ -302,16 +352,36 @@
   function removeEquippedItemEverywhere(equipId) {
     ['rainbow','white','black'].forEach((id) => { const loadout = getEquipmentLoadout(id); EQUIP_SLOTS.forEach((slot) => { if (loadout[slot] === equipId) loadout[slot] = null; }); state.equipment[id] = loadout; });
   }
+  function isHandSlot(slot) { return slot === 'rightHand' || slot === 'leftHand'; }
+  function equipmentFitsSlot(equip, slot) {
+    if (equip.slot === 'accessory') return slot.startsWith('accessory');
+    if (equip.slot === 'rightHand' || equip.slot === 'leftHand') {
+      if (!isHandSlot(slot)) return false;
+      if (equip.handType === 'twoHand' || equip.handType === 'twoHandShield') return slot === 'rightHand';
+      if (equip.handType === 'shield') return slot === 'leftHand';
+      return slot === 'rightHand' || slot === 'leftHand';
+    }
+    return equip.slot === slot;
+  }
   function equipEquipment(id, slot, equipId) {
     const equip = D.EQUIPMENT_DEFS[equipId];
-    if (!equip || !EQUIP_SLOTS.includes(slot) || !state.ownedEquipment?.includes(equipId) || !equipmentAllows(id, equip)) return false;
-    const slotOk = equip.slot === 'accessory' ? slot.startsWith('accessory') : equip.slot === slot;
-    if (!slotOk) return false;
+    if (!equip || !EQUIP_SLOTS.includes(slot) || !state.ownedEquipment?.includes(equipId) || !equipmentAllows(id, equip) || !equipmentFitsSlot(equip,slot)) return false;
     removeEquippedItemEverywhere(equipId);
-    const loadout = getEquipmentLoadout(id); loadout[slot] = equipId; state.equipment[id] = loadout;
+    const loadout = getEquipmentLoadout(id);
+    if (equip.handType === 'twoHand' || equip.handType === 'twoHandShield') { loadout.rightHand = equipId; loadout.leftHand = null; }
+    else {
+      if (slot === 'leftHand' && loadout.rightHand && ['twoHand','twoHandShield'].includes(D.EQUIPMENT_DEFS[loadout.rightHand]?.handType)) loadout.rightHand = null;
+      loadout[slot] = equipId;
+    }
+    state.equipment[id] = loadout;
     capResources(id); appendLog(`${getDef(id).short}が${equip.name}を${EQUIP_SLOT_LABELS[slot]}に装備。`); saveGame(); return true;
   }
-  function unequipEquipment(id, slot) { if (!EQUIP_SLOTS.includes(slot)) return; const loadout = getEquipmentLoadout(id); const old = loadout[slot]; loadout[slot] = null; state.equipment[id] = loadout; capResources(id); if (old) appendLog(`${getDef(id).short}が${D.EQUIPMENT_DEFS[old]?.name || '装備'}を外した。`); saveGame(); }
+  function unequipEquipment(id, slot) {
+    if (!EQUIP_SLOTS.includes(slot)) return; const loadout = getEquipmentLoadout(id); const old = loadout[slot];
+    if (slot === 'leftHand' && loadout.rightHand && ['twoHand','twoHandShield'].includes(D.EQUIPMENT_DEFS[loadout.rightHand]?.handType)) { loadout.rightHand = null; }
+    else loadout[slot] = null;
+    state.equipment[id] = loadout; capResources(id); if (old) appendLog(`${getDef(id).short}が${D.EQUIPMENT_DEFS[old]?.name || '装備'}を外した。`); saveGame();
+  }
 
   function panelEffects(id) {
     return panelEffectsForState(id, state);
@@ -336,8 +406,9 @@
     const equipTotals = {};
     getEquippedEquipment(id, localState).forEach((equip) => Object.entries(equip.stats || {}).forEach(([key, value]) => { equipTotals[key] = (equipTotals[key] || 0) + Number(value || 0); }));
     const stats = {};
+    const foodStats = localState === state ? (getFoodEffect().stats || {}) : {};
     Object.keys(def.base).forEach((key) => {
-      stats[key] = def.base[key] + (def.growth[key] || 0) * (ch.level - 1) + (effects[key] || 0) + (equipTotals[key] || 0);
+      stats[key] = def.base[key] + (def.growth[key] || 0) * (ch.level - 1) + (effects[key] || 0) + (equipTotals[key] || 0) + Number(foodStats[key] || 0);
     });
     return stats;
   }
@@ -374,7 +445,7 @@
     return m.level >= 10 ? '熟練Lv.10 MAX' : `熟練Lv.${m.level}　${m.exp}/${masteryRequired(m.level)}`;
   }
   function gainMastery(id, skill) {
-    const m = masteryState(id, skill.id); let gain = 1 + (hasPassive(id,'mastery_plus') ? 1 : 0);
+    const m = masteryState(id, skill.id); let gain = 1 + (hasPassive(id,'mastery_plus') ? 1 : 0) + Math.floor((getPartyEquipmentSpecials().masteryRate || 0) * 3);
     if (m.level >= 10) return false;
     m.exp += gain; let raised = false;
     while (m.level < 10 && m.exp >= masteryRequired(m.level)) { m.exp -= masteryRequired(m.level); m.level += 1; raised = true; }
@@ -439,7 +510,7 @@
     if (q.type === 'collect') return countItem(q.target);
     return state.kills[q.target] || 0;
   }
-  function isQuestAvailable(q) { return state.adventureExp >= q.unlockAt && rankAllowed(q.rank); }
+  function isQuestAvailable(q) { return state.adventureExp >= q.unlockAt && rankAllowed(q.rank) && (!q.requiresQuests || q.requiresQuests.every((id) => state.completedQuests.includes(id))); }
   function isQuestActive(id) { return state.activeQuests.includes(id); }
   function isQuestDone(id) { const q = D.QUESTS[id]; return !!q && !q.repeatable && state.completedQuests.includes(id); }
   function questCompletionCount(id) { return state.questCompletions?.[id] || (state.completedQuests.includes(id) ? 1 : 0); }
@@ -486,6 +557,8 @@
     q.reward.items?.forEach((item) => addItem(item.id, item.qty));
     if (id === 'q_herb') state.flags.protect = true;
     if (id === 'q_boss') state.flags.anger = true;
+    if (q.teriosUnlock) { q.teriosUnlock.forEach((owner) => { state.flags[`terios_${owner}`] = true; }); appendLog('テリオスへの扉が開いた。'); }
+    if (q.key) { state.storyLog ||= []; state.storyLog.push({id:q.id,name:q.name,at:Date.now()}); }
     appendLog(`依頼達成：「${q.name}」 報酬 ${q.reward.gold}G`);
     const result = { id, name:q.name, gold:q.reward.gold, advExp:q.reward.advExp, repeatable:!!q.repeatable, items:q.reward.items || [] };
     saveGame();
@@ -497,6 +570,7 @@
           ? '\n\n治療師は、薬草を抱えて何度も頭を下げた。\n白零「……よかった。間に合ったんですね。」\n虹全「うん。白零が見つけてくれたからだ。」\n白零「私が……役に立てた？」\n虹全「もちろん。」\n\n【物語パネル：「守りたい」が解放条件を満たしました】'
           : id === 'q_boss'
             ? '\n\n黒零は、獣王が去った森をしばらく見ていた。\n黒零「……静かになった。」\n虹全「もう、怯えなくていい。」\n黒零「うん。この森は、壊させない。」\n\n【物語パネル：「壊したくない」が解放条件を満たしました】'
+            : q.storyText ? `\n\n【キークエスト】\n${q.storyText}${q.teriosUnlock ? '\n\n【テリオス覚醒】三人の追加パネルが解放されました。' : ''}`
             : q.repeatable ? `\n\nこの依頼は繰り返し受注できます。今回の達成回数：${questCompletionCount(id)}回` : '';
         showDialogue('依頼達成', `《ギルド》の受付は、静かに報酬を差し出した。\n「助かったよ。次も頼りにしている。」${extra}`);
       }
@@ -599,6 +673,16 @@
     appendLog(`${getDef(id).short}がパネル「${panel.name}」を解放。`);
     audio.sfx('unlock'); toast(`${getDef(id).short}：${panel.name} を解放！${delta}`, 'good'); saveGame(); render();
   }
+  function unlockPanelChain(id, branch) {
+    const panels = getDef(id).panels.filter((p)=>p.branch===branch);
+    let unlocked = 0;
+    for (const panel of panels) {
+      if (canUnlockPanel(id,panel)) { const ch=getChar(id); ch.panelPoints-=panel.cost; ch.unlockedPanels.push(panel.id); unlocked += 1; continue; }
+      if (!getChar(id).unlockedPanels.includes(panel.id)) break;
+    }
+    if (!unlocked) return toast('PT不足または物語・レベル条件のため、まとめて解放できません。','warn');
+    capResources(id); appendLog(`${getDef(id).short}が${branch}系統を${unlocked}枚まとめて解放。`); audio.sfx('unlock'); saveGame(); render(); toast(`${unlocked}枚のパネルをまとめて解放しました。`,'good');
+  }
 
   function render() {
     const scene = state.scene;
@@ -623,7 +707,7 @@
     return `<div class="status-strip-v4 card">
       <div class="status-level"><span class="badge">冒険者 ${rank.name}</span><div class="status-description">${rank.description}</div></div>
       <div class="status-stamina"><div class="meter-label"><span>スタミナ ${formatStamina(state.stamina.current)}/${max}</span><span>${staminaRecoveryLabel()}</span></div><div class="meter stamina"><span style="width:${pct(state.stamina.current,max)}%"></span></div></div>
-      <div class="status-gold"><strong>${state.gold}G</strong><span>所持金</span></div>
+      <div class="status-gold"><strong>${state.gold}G</strong><span>${foodTimeLabel()}</span></div>
     </div>`;
   }
 
@@ -640,7 +724,7 @@
   function renderTitle() {
     return `<section class="hero">
       <div class="hero-content">
-        <div class="hero-eyebrow">PIXEL FANTASY RPG　— REGION & EQUIPMENT BUILD v0.7 —</div>
+        <div class="hero-eyebrow">PIXEL FANTASY RPG　— REGION & EQUIPMENT BUILD v0.8 —</div>
         <h1>全零〈オムニル〉<br><span class="rainbow-text">星なき始まり</span></h1>
         <p>何も持たなかった三人が、出会いと旅の中で自分の意志を見つけていく。<br>白、黒、そして虹。零から始まる、三人の物語。</p>
         <div class="button-row">
@@ -649,11 +733,11 @@
         </div>
       </div>
     </section>
-    <h2 class="section-title">v0.7で遊べること</h2>
+    <h2 class="section-title">v0.8で遊べること</h2>
     <div class="grid three">
-      <article class="card"><h3>◫ 4地方と探索</h3><p>リンドホルム、白霜北域、緋火海岸、暮影峡谷。町4・探索地21を、初級・中級・上級から選べる。</p></article>
-      <article class="card"><h3>⚔ 戦闘と装備</h3><p>3人コマンド戦闘＋AUTO対応。頭・体・腕・足・装飾2枠の6部位装備で、特殊効果も組み合わせる。</p></article>
-      <article class="card"><h3>◉ ギルドと育成</h3><p>地方別依頼、納品・討伐の繰り返し依頼、一括受注・一括報告。成長パネルと技熟練Lv.10を育てる。</p></article>
+      <article class="card"><h3>◫ 十地方と探索</h3><p>リンドホルムから原初境界まで十地方。町10・探索地36を、初級・中級・上級から選べる。</p></article>
+      <article class="card"><h3>⚔ 戦闘と8部位装備</h3><p>3人コマンド戦闘＋AUTO対応。頭・体・腕・足・右手・左手・装飾2枠を組み、片手・両手武器と特殊効果を使い分ける。</p></article>
+      <article class="card"><h3>◉ 食堂・ギルド・育成</h3><p>地方別の料理100種、依頼148件、キークエスト。一括受注・一括報告、成長パネル、技習熟Lv.10を育てる。</p></article>
     </div>
     <p class="note">※現在のマップ・人物・敵は「遊びの芯を確認するための仮ドット」。次段階で世界の色設計、地形タイル、立ち絵、敵アニメーションまで本制作します。</p>`;
   }
@@ -666,11 +750,11 @@
     const region = D.REGIONS?.[regionId] || { name:'リンドホルム地方', description:'第一章の舞台。', label:'第一章：星なき始まり' };
     if (mode === 'world') {
       const regionCards = Object.values(D.REGIONS || {}).map((r) => {
-        const unlocked = rankAllowed(r.unlockRank || '1');
+        const unlocked = regionUnlocked(r.id);
         const active = r.id === regionId;
-        return `<button class="world-region-card ${active?'active':''} ${unlocked?'':'locked'}" data-action="map-select-region" data-id="${r.id}" ${unlocked?'':'disabled'}><span>${unlocked?'◆':'▣'}</span><b>${r.name}</b><small>${unlocked ? r.label : `要 冒険者Lv.${r.unlockRank}`}</small><em>${r.description}</em></button>`;
+        return `<button class="world-region-card ${active?'active':''} ${unlocked?'':'locked'}" data-action="map-select-region" data-id="${r.id}" ${unlocked?'':'disabled'}><span>${unlocked?'◆':'▣'}</span><b>${r.name}</b><small>${unlocked ? r.label : regionLockText(r.id)}</small><em>${r.description}</em></button>`;
       }).join('');
-      return `${renderStatusStrip()}${renderPartyStrip()}<h1 class="page-title">世界地図</h1><p class="page-subtitle">旅の足跡が広がるにつれ、地方地図を選んで各地へ移動できます。現在の実装では、リンドホルム地方・白霜北域・緋火海岸・暮影峡谷を順に探索できます。</p>
+      return `${renderStatusStrip()}${renderPartyStrip()}<h1 class="page-title">世界地図</h1><p class="page-subtitle">旅の足跡が広がるにつれ、地方地図を選んで各地へ移動できます。リンドホルムから原初境界まで、十地方を順に踏破しましょう。</p>
         <div class="map-shell world-map-shell"><canvas id="worldCanvas" class="map-canvas" width="800" height="500"></canvas></div>
         <div class="world-region-grid">${regionCards}</div>
         <div class="button-row" style="margin-top:14px;"><button class="primary-button" data-action="map-mode" data-mode="region">${region.name}の地方地図を見る</button></div>
@@ -681,7 +765,7 @@
       <div class="map-heading-row"><div><h1 class="page-title">${region.name} 地方地図</h1><p class="page-subtitle">${region.description}</p><p class="region-story">${D.REGION_STORIES?.[regionId] || ''}</p></div><button class="small-button" data-action="map-mode" data-mode="world">世界地図</button></div>
       <div class="map-shell regional-map-shell">
         <canvas id="worldCanvas" class="map-canvas" width="800" height="500"></canvas>
-        ${locations.map((loc) => { const unlocked = rankAllowed(loc.rank); return `<button class="map-label location-${loc.type} ${unlocked ? '' : 'locked'}" style="left:${loc.x}%;top:${loc.y}%" data-action="enter-location" data-id="${loc.id}" ${unlocked ? '' : 'disabled'}>${loc.name}<br><small>${unlocked ? (loc.type === 'town' ? '施設を利用' : '探索地へ') : `要 冒険者Lv.${loc.rank}`}</small></button>`; }).join('')}
+        ${locations.map((loc) => { const unlocked = regionUnlocked(regionId) && rankAllowed(loc.rank); return `<button class="map-label location-${loc.type} ${unlocked ? '' : 'locked'}" style="left:${loc.x}%;top:${loc.y}%" data-action="enter-location" data-id="${loc.id}" ${unlocked ? '' : 'disabled'}>${loc.name}<br><small>${unlocked ? (loc.type === 'town' ? '施設を利用' : '探索地へ') : `要 冒険者Lv.${loc.rank}`}</small></button>`; }).join('')}
       </div>
       <div class="map-legend"><span>◆ 町・施設</span><span>◆ 探索地</span><span>▣ 未解放（冒険者Lv条件）</span></div>
       <div class="card" style="margin-top:13px;"><strong>次の冒険者レベルまで</strong><div class="meter-label"><span>${getRank().name}　冒険者経験 ${state.adventureExp}</span><span>${next ? `${next}で次のLv` : '最高Lv'}</span></div><div class="meter exp"><span style="width:${next ? pct(state.adventureExp - getRank().threshold, next - getRank().threshold) : 100}%"></span></div></div>
@@ -696,7 +780,7 @@
     return getDifficulty(selected) && rankAllowed(getDifficulty(selected).rank) ? selected : 'beginner';
   }
   function getSelectedDifficulty(locationId) { return getDifficulty(getSelectedDifficultyId(locationId)); }
-  function staminaCost(baseCost, auto = false) { return Number(baseCost) * (auto ? AUTO_STAMINA_MULTIPLIER : 1); }
+  function staminaCost(baseCost, auto = false) { const discount = getPartyEquipmentSpecials().staminaDiscount || 0; return Math.max(.5, Number(baseCost) * (auto ? AUTO_STAMINA_MULTIPLIER : 1) * Math.max(.5, 1 - discount)); }
   function explorationCost(difficulty, auto = false) { return staminaCost(difficulty.explorationCost, auto); }
   function battleCost(difficulty, auto = false) { return staminaCost(difficulty.battleCost, auto); }
   function difficultyColorClass(id) { return id === 'advanced' ? 'advanced' : id === 'intermediate' ? 'intermediate' : 'beginner'; }
@@ -711,6 +795,7 @@
           <button class="facility-hotspot" style="left:48%;top:30%;" data-action="facility" data-id="shop">道具屋</button>
           <button class="facility-hotspot" style="left:72%;top:48%;" data-action="facility" data-id="craft">製造所</button>
           <button class="facility-hotspot" style="left:48%;top:70%;" data-action="facility" data-id="inn">宿屋</button>
+          <button class="facility-hotspot" style="left:27%;top:76%;" data-action="facility" data-id="restaurant">食堂</button>
           <button class="facility-hotspot" style="left:78%;top:73%;" data-action="facility" data-id="sell">買取所</button>
         </div></div><div class="location-caption"><strong>${D.REGIONS?.[loc.region]?.name || 'この地方'}の拠点</strong><p>この地方の依頼、買い物、製造、休息、素材売却を利用できます。宿屋ではスタミナも全回復します。</p></div>
         <h2 class="section-title">施設一覧</h2><div class="facility-grid">${renderFacilityCards()}</div>`;
@@ -744,6 +829,7 @@
       ['shop','▤','道具屋','回復アイテムを購入'],
       ['craft','⚒','製造所','素材から装備・道具を作る'],
       ['inn','⌂','宿屋','20GでHP・MPを全回復'],
+      ['restaurant','♨','地方食堂','地方料理で時間制限バフ'],
       ['sell','◎','素材買取所','不要な素材を売却'],
     ];
     return data.map(([id, icon, title, desc]) => `<button class="facility-card" data-action="facility" data-id="${id}"><span class="facility-icon">${icon}</span><b>${title}</b><small>${desc}</small></button>`).join('');
@@ -760,7 +846,7 @@
   }
   function equipmentShortSummary(id) {
     const count = getEquippedEquipment(id).length;
-    return `${count}/6部位　${EQUIP_SLOTS.map((slot) => `${EQUIP_SLOT_LABELS[slot]}:${equipmentNameForSlot(id,slot)}`).join('／')}`;
+    return `${count}/8部位　${EQUIP_SLOTS.map((slot) => `${EQUIP_SLOT_LABELS[slot]}:${equipmentNameForSlot(id,slot)}`).join('／')}`;
   }
   function renderCharacterCard(id) {
     const def = getDef(id); const ch = getChar(id); const stats = getStats(id);
@@ -773,7 +859,7 @@
       <div class="meter-label"><span>MP ${ch.mp} / ${stats.maxMp}</span><span>経験値 ${ch.exp}/${levelExpRequired(ch.level)}</span></div><div class="meter mp"><span style="width:${pct(ch.mp,stats.maxMp)}%"></span></div>
       <div class="trait-box"><b>種族特性（3）</b><br>${traitText}</div>
       <div class="stat-grid">${[['攻撃',stats.atk],['防御',stats.def],['魔力',stats.mag],['敏捷',stats.agi],['技',`${unlocked.skill}/30`],['常時',`${unlocked.passive}/10`],['能力',`${unlocked.stat}/40`],['PT',ch.panelPoints]].map(([n,v])=>`<div class="stat-box"><span>${n}</span><strong>${v}</strong></div>`).join('')}</div>
-      <div class="equipment-summary"><b>装備（${getEquippedEquipment(id).length}/6）</b><span>${equipmentShortSummary(id)}</span></div>
+      <div class="equipment-summary"><b>装備（${getEquippedEquipment(id).length}/8）</b><span>${equipmentShortSummary(id)}</span></div>
       <div class="note">習得技：${skillCount}　／　遠い到達点：${def.teriosName}</div>
       <div class="character-actions" style="margin-top:10px;"><button class="small-button" data-action="open-panel" data-id="${id}">成長パネル</button><button class="small-button" data-action="open-equipment" data-id="${id}">装備変更</button><button class="small-button" data-action="view-character" data-id="${id}">人物詳細</button></div></div></article>`;
   }
@@ -825,7 +911,7 @@
     const m = panelMeta(id, branch); const panels = getDef(id).panels.filter((p) => p.branch === branch); const [done, total] = panelProgress(id, branch);
     const nextIndex = panels.findIndex((p) => !getChar(id).unlockedPanels.includes(p.id));
     return `<section class="branch-board panel-sequence-board"><header><span class="branch-icon">${m.icon}</span><div><h2>${m.label}</h2><p>${m.description}　—　${done}/${total} 解放</p></div></header>
-      <div class="panel-sequence">${panels.map((panel, index) => renderSkillPanel(id, panel, index, nextIndex)).join('')}</div></section>`;
+      <div class="button-row" style="margin:8px 0 12px;"><button class="secondary-button" data-action="panel-unlock-chain" data-id="${id}" data-branch="${branch}">この系統を解放できる所までまとめて開放</button></div><div class="panel-sequence">${panels.map((panel, index) => renderSkillPanel(id, panel, index, nextIndex)).join('')}</div></section>`;
   }
   function renderSkillPanel(id, panel, index, nextIndex) {
     const ch = getChar(id); const unlocked = ch.unlockedPanels.includes(panel.id); const available = canUnlockPanel(id, panel); const selected = state.panelUi?.selected?.[id] === panel.id;
@@ -915,7 +1001,7 @@
 
   function enterLocation(id) {
     const loc = D.LOCATIONS[id];
-    if (!loc || !rankAllowed(loc.rank)) return toast(`この場所には 冒険者Lv.${loc.rank} 以上が必要です。`, 'warn');
+    if (!loc || !regionUnlocked(loc.region) || !rankAllowed(loc.rank)) return toast('この場所はまだ解放されていません。キークエストと冒険者レベルを確認してください。', 'warn');
     state.currentLocation = id;
     state.scene = 'location';
     saveGame();
@@ -1159,19 +1245,71 @@
   function applyDebuffs(enemy,debuff,turnsBonus=0) { Object.entries(debuff||{}).forEach(([name,turns])=>setStatus(enemy,name,turns+turnsBonus)); }
   function applyBarrier(id,ratio) { const ch=getChar(id);ch.barrier=Math.max(ch.barrier||0,Math.floor(getStats(id).maxHp*ratio)); }
   function removeNegative(id) { const ch=getChar(id); if(ch.status){delete ch.status.fracture;delete ch.status.weaken;delete ch.status.slow;delete ch.status.bind;delete ch.status.silence;} }
-  function dealDamage(attackerId,target,multiplier=1,kind='physical',isEnemyTarget=true,bonusOnDebuff=0,extra={}) { const offensive=kind==='magic'||kind==='special'?combatStat(attackerId,'mag'):combatStat(attackerId,'atk'); const gear=getEquipmentSpecials(attackerId); let power=multiplier; if(bonusOnDebuff&&Object.keys(target.status||{}).some(k=>k!=='buffs'))power+=bonusOnDebuff;if(hasPassive(attackerId,'debuff_damage')&&Object.keys(target.status||{}).some(k=>k!=='buffs'))power*=1.12;if(gear.debuffDamage&&Object.keys(target.status||{}).some(k=>k!=='buffs'))power*=1+gear.debuffDamage;if(gear.lowHpDamage&&getChar(attackerId).hp<=getStats(attackerId).maxHp*.5)power*=1+gear.lowHpDamage;if(attackerId==='rainbow'&&getChar('rainbow').hp<=getStats('rainbow').maxHp*.5)power*=1.1;if(attackerId==='black'&&target.status?.fracture)power*=1.15;if(extra.pierce)target={...target,def:Math.floor(target.def*(1-extra.pierce))};if(extra.execute&&isEnemyTarget&&target.hp/target.maxHp<.32)power*=1.32;let damage=Math.max(1,Math.floor(offensive*power-effectiveDefenderDef(target,isEnemyTarget)*.52+rng(-3,4))); if(isEnemyTarget&&target.metal&&Math.random()<.34)damage=0; if(hasPassive(attackerId,'crit_up')&&Math.random()<.14)damage=Math.floor(damage*1.45);applyDamage(target,damage,isEnemyTarget);return damage; }
-  function applyDamage(target,damage,isEnemy){if(isEnemy){target.hp=Math.max(0,target.hp-damage);return;}let targetId=target;const ch=getChar(targetId);const protectedBy=ch.protectedBy;if(protectedBy&&protectedBy!==targetId&&getChar(protectedBy)?.hp>0){targetId=protectedBy;battleLog(`${getDef(protectedBy).short}が攻撃を受け止めた！`);}const defender=getChar(targetId);let final=damage;if(defender.barrier){const used=Math.min(defender.barrier,final);defender.barrier-=used;final-=used;if(defender.barrier<=0)delete defender.barrier;}if(defender.guard)final=Math.max(1,Math.floor(final*.5));if(protectedBy&&hasPassive(protectedBy,'guard_reduction'))final=Math.max(1,Math.floor(final*.85)); const gearCut=getEquipmentSpecials(targetId).damageCut||0; if(gearCut)final=Math.max(1,Math.floor(final*(1-gearCut)));if(final>=defender.hp&&defender.deathGuard){defender.hp=1;delete defender.deathGuard;battleLog(`${getDef(targetId).short}は結界に守られた！`);}else defender.hp=Math.max(0,defender.hp-final);}
+  function dealDamage(attackerId,target,multiplier=1,kind='physical',isEnemyTarget=true,bonusOnDebuff=0,extra={}) {
+    const offensive=kind==='magic'||kind==='special'?combatStat(attackerId,'mag'):combatStat(attackerId,'atk');
+    const gear=getEquipmentSpecials(attackerId); let power=multiplier;
+    const charged=getChar(attackerId)?.charge||0;
+    if(charged){power*=1+charged; delete getChar(attackerId).charge;}
+    if(gear.damageRate)power*=1+gear.damageRate;
+    if(gear.allRound)power*=1+gear.allRound;
+    if(gear.bossDamage && isEnemyTarget && target.boss)power*=1+gear.bossDamage;
+    if(bonusOnDebuff&&Object.keys(target.status||{}).some(k=>k!=='buffs'))power+=bonusOnDebuff;
+    if(hasPassive(attackerId,'debuff_damage')&&Object.keys(target.status||{}).some(k=>k!=='buffs'))power*=1.12;
+    if(gear.debuffDamage&&Object.keys(target.status||{}).some(k=>k!=='buffs'))power*=1+gear.debuffDamage;
+    if(gear.lowHpDamage&&getChar(attackerId).hp<=getStats(attackerId).maxHp*.5)power*=1+gear.lowHpDamage;
+    if(attackerId==='rainbow'&&getChar('rainbow').hp<=getStats('rainbow').maxHp*.5)power*=1.1;
+    if(attackerId==='black'&&target.status?.fracture)power*=1.15;
+    const pierce = Math.max(0, Math.min(.85, Number(extra.pierce||0) + Number(gear.pierceRate||0)));
+    if(pierce)target={...target,def:Math.floor(target.def*(1-pierce))};
+    if(extra.execute&&isEnemyTarget&&target.hp/target.maxHp<.32)power*=1.32;
+    let damage=Math.max(1,Math.floor(offensive*power-effectiveDefenderDef(target,isEnemyTarget)*.52+rng(-3,4)));
+    if(isEnemyTarget&&target.metal&&Math.random()<.34)damage=0;
+    const criticalChance=(hasPassive(attackerId,'crit_up')?.14:0) + Number(gear.criticalRate||0);
+    if(Math.random()<criticalChance){damage=Math.floor(damage*1.45); battleLog(`${getDef(attackerId).short}の会心！`);}
+    applyDamage(target,damage,isEnemyTarget);return damage;
+  }
+  function applyDamage(target,damage,isEnemy){if(isEnemy){target.hp=Math.max(0,target.hp-damage);return;}let targetId=target;const ch=getChar(targetId);const protectedBy=ch.protectedBy;if(protectedBy&&protectedBy!==targetId&&getChar(protectedBy)?.hp>0){targetId=protectedBy;battleLog(`${getDef(protectedBy).short}が攻撃を受け止めた！`);}const defender=getChar(targetId); if(defender.cloneTurns && Math.random()<.35){ battleLog(`${getDef(targetId).short}の分身が攻撃をかわした！`); return; } let final=damage;if(defender.barrier){const used=Math.min(defender.barrier,final);defender.barrier-=used;final-=used;if(defender.barrier<=0)delete defender.barrier;}if(defender.guard)final=Math.max(1,Math.floor(final*.5));if(protectedBy&&hasPassive(protectedBy,'guard_reduction'))final=Math.max(1,Math.floor(final*.85)); const gearCut=getEquipmentSpecials(targetId).damageCut||0; if(gearCut)final=Math.max(1,Math.floor(final*(1-gearCut)));if(final>=defender.hp&&defender.deathGuard){defender.hp=1;delete defender.deathGuard;battleLog(`${getDef(targetId).short}は結界に守られた！`);}else defender.hp=Math.max(0,defender.hp-final);}
   function executeAttack(actorId,enemy){const dmg=dealDamage(actorId,enemy,1,'physical',true);audio.sfx('hit');battleLog(`${getDef(actorId).short}の攻撃！ ${enemy.name}に${dmg}ダメージ。`);resolveAfterHit();}
-  function executeSkill(actorId,skill,target){const actor=getChar(actorId);const mpCost=skillMpCost(actorId,skill);if(actor.mp<mpCost)return; actor.mp-=mpCost; const scale=masteryScale(actorId,skill);const dur=scale.durationBonus+(hasPassive(actorId,'duration_plus')?1:0);const power=(skill.power||0)*scale.potency;const gear=getEquipmentSpecials(actorId);const heal=(skill.heal||0)*scale.potency*(1+(gear.healRate||0));const barrier=(skill.barrier||0)*(1+(scale.level-1)*.07)*(scale.max?1.18:1);const regen=(skill.regen||0)+(scale.level>=6?1:0)+(scale.max?1:0);let targetEnemies=[];if(skill.target==='enemy'&&target)targetEnemies=[target];else if(skill.target==='allEnemies')targetEnemies=getAliveEnemies();if(skill.power&&!skill.allInOne){targetEnemies.forEach(e=>{const dmg=dealDamage(actorId,e,power,skill.kind,true,skill.bonusOnDebuff||0,{pierce:skill.pierce,execute:skill.execute});battleLog(`${getDef(actorId).short}の ${skill.name}！ ${e.name}に${dmg}ダメージ。`);});}
-    if(skill.allEnemyPower){getAliveEnemies().forEach(e=>{const dmg=dealDamage(actorId,e,skill.allEnemyPower*scale.potency,'magic',true);battleLog(`${skill.name}の余波！ ${e.name}に${dmg}ダメージ。`);});}
-    let allyTargets=skill.target==='allAllies'||skill.reviveAll?['rainbow','white','black']:(skill.target==='ally'?[target]:skill.target==='self'?[actorId]:[]); if(!allyTargets.length && (skill.heal||skill.barrier||skill.mpHeal||skill.allInOne)) allyTargets=['rainbow','white','black']; if(heal){allyTargets.filter(Boolean).forEach(id=>{const ch=getChar(id);if(ch.hp<=0&&(skill.revive||skill.reviveAll)){ch.hp=1;}if(ch.hp>0){let amount=Math.floor(getStats(id).maxHp*heal);if(skill.balanceHeal&&pct(ch.hp,getStats(id).maxHp)<.4)amount=Math.floor(amount*1.35);if(hasPassive(actorId,'heal_boost'))amount=Math.floor(amount*1.1);if(hasPassive(actorId,'low_ally_heal')&&pct(ch.hp,getStats(id).maxHp)<.5)amount=Math.floor(amount*1.15);ch.hp=clamp(ch.hp+amount,0,getStats(id).maxHp);if(hasPassive(actorId,'heal_regen'))ch.regen=Math.max(ch.regen||0,1);if(hasPassive(actorId,'heal_mp'))ch.mp=clamp(ch.mp+Math.floor(getStats(id).maxMp*.03),0,getStats(id).maxMp);}});}
-    if(skill.cleanse)allyTargets.filter(Boolean).forEach(id=>{removeNegative(id);if(hasPassive(actorId,'cleanse_barrier'))applyBarrier(id,.10);}); if(skill.mpHeal)allyTargets.filter(Boolean).forEach(id=>{const ch=getChar(id);ch.mp=clamp(ch.mp+Math.floor(getStats(id).maxMp*skill.mpHeal*scale.potency),0,getStats(id).maxMp);}); if(skill.regen)allyTargets.filter(Boolean).forEach(id=>{getChar(id).regen=Math.max(getChar(id).regen||0,regen);}); if(skill.barrier)allyTargets.filter(Boolean).forEach(id=>applyBarrier(id,barrier)); if(skill.deathGuard)allyTargets.filter(Boolean).forEach(id=>getChar(id).deathGuard=true); if(skill.buffs)allyTargets.filter(Boolean).forEach(id=>addBuff(id,skill.buffs,(skill.turns||2)+dur)); if(skill.guard&&target){getChar(target).protectedBy=actorId;getChar(target).protectedTurns=(skill.turns||2)+dur;} if(skill.debuff)targetEnemies.length?targetEnemies.forEach(e=>applyDebuffs(e,skill.debuff,dur)):getAliveEnemies().forEach(e=>applyDebuffs(e,skill.debuff,dur)); if(skill.dispel)getAliveEnemies().forEach(e=>{if(e.status) delete e.status.buffs;}); if(skill.stealBuff&&skill.buffs)addBuff(actorId,skill.buffs,(skill.turns||2)+dur); if(skill.lifeSteal&&targetEnemies.length){const hit=0;const recovered=Math.floor((skill.power||1)*combatStat(actorId,skill.kind==='physical'?'atk':'mag')*skill.lifeSteal*.55);actor.hp=clamp(actor.hp+recovered,0,getStats(actorId).maxHp);} if(skill.mpSteal)actor.mp=clamp(actor.mp+Math.floor(getStats(actorId).maxMp*skill.mpSteal),0,getStats(actorId).maxMp); if(skill.allInOne){getAliveEnemies().forEach(e=>{const dmg=dealDamage(actorId,e,power,'special',true);battleLog(`${skill.name}！ ${e.name}に${dmg}ダメージ。`);});['rainbow','white','black'].forEach(id=>{const ch=getChar(id);ch.hp=clamp(ch.hp+Math.floor(getStats(id).maxHp*heal),0,getStats(id).maxHp);});}
-    if(skill.kind==='physical'||skill.kind==='magic'||skill.kind==='special') { if(hasPassive(actorId,'fracture_chance')&&Math.random()<.2)targetEnemies.forEach(e=>setStatus(e,'fracture',1)); audio.sfx('hit'); } else audio.sfx('heal'); if(hasPassive(actorId,'skill_cycle')){actor.hp=clamp(actor.hp+Math.floor(getStats(actorId).maxHp*.02),0,getStats(actorId).maxHp);actor.mp=clamp(actor.mp+Math.floor(getStats(actorId).maxMp*.02),0,getStats(actorId).maxMp);} gainMastery(actorId,skill);battleLog(`${getDef(actorId).short}は ${skill.name} を使った。`);resolveAfterHit();}
+  function executeSkill(actorId,skill,target) {
+    const actor=getChar(actorId); const mpCost=skillMpCost(actorId,skill); if(actor.mp<mpCost) return; actor.mp-=mpCost;
+    const scale=masteryScale(actorId,skill); const dur=scale.durationBonus+(hasPassive(actorId,'duration_plus')?1:0); const power=(skill.power||0)*scale.potency;
+    const gear=getEquipmentSpecials(actorId); const allRound=gear.allRound||0; const heal=(skill.heal||0)*scale.potency*(1+(gear.healRate||0)+allRound); const barrier=(skill.barrier||0)*(1+(scale.level-1)*.07)*(scale.max?1.18:1)*(1+allRound);
+    const regen=(skill.regen||0)+(scale.level>=6?1:0)+(scale.max?1:0); const b=state.battle; b.usedSkills ||= {}; b.usedSkills[actorId] ||= {}; b.usedSkills[actorId][skill.id]=true;
+    let targetEnemies=[]; if(skill.target==='enemy'&&target) targetEnemies=[target]; else if(skill.target==='allEnemies') targetEnemies=getAliveEnemies();
+    const hitOne=(e,mult=power)=>{ const dmg=dealDamage(actorId,e,mult,skill.kind,true,skill.bonusOnDebuff||0,{pierce:skill.pierce,execute:skill.execute}); battleLog(`${getDef(actorId).short}の${skill.name}！ ${e.name}に${dmg}ダメージ。`); return dmg; };
+    if(skill.power&&!skill.allInOne) {
+      if(skill.randomHits){ for(let i=0;i<skill.randomHits;i++){const e=choice(getAliveEnemies());if(!e)break;hitOne(e,power);if(skill.chainOnKill&&e.hp<=0){const next=choice(getAliveEnemies());if(next)hitOne(next,power*.75);} } }
+      else if(skill.allHits){ for(let h=0;h<skill.allHits;h++) getAliveEnemies().slice().forEach((e)=>hitOne(e,power)); }
+      else if(skill.hits){ for(let h=0;h<skill.hits;h++) targetEnemies.slice().forEach((e)=>{if(e.hp>0)hitOne(e,power);}); }
+      else targetEnemies.forEach((e)=>hitOne(e,power));
+    }
+    if(skill.allEnemyPower)getAliveEnemies().forEach(e=>hitOne(e,skill.allEnemyPower*scale.potency));
+    let allyTargets=skill.target==='allAllies'||skill.reviveAll?['rainbow','white','black']:(skill.target==='ally'?[target]:skill.target==='self'?[actorId]:[]);
+    if(!allyTargets.length&&(skill.heal||skill.barrier||skill.mpHeal||skill.allInOne||skill.extraActions)) allyTargets=['rainbow','white','black'];
+    if(heal) allyTargets.filter(Boolean).forEach((id)=>{const ch=getChar(id);if(ch.hp<=0&&(skill.revive||skill.reviveAll))ch.hp=1;if(ch.hp>0){let amount=Math.floor(getStats(id).maxHp*heal);if(skill.balanceHeal&&pct(ch.hp,getStats(id).maxHp)<.4)amount=Math.floor(amount*1.35);if(hasPassive(actorId,'heal_boost'))amount=Math.floor(amount*1.1);if(hasPassive(actorId,'low_ally_heal')&&pct(ch.hp,getStats(id).maxHp)<.5)amount=Math.floor(amount*1.15);ch.hp=clamp(ch.hp+amount,0,getStats(id).maxHp);if(hasPassive(actorId,'heal_regen'))ch.regen=Math.max(ch.regen||0,1);if(hasPassive(actorId,'heal_mp'))ch.mp=clamp(ch.mp+Math.floor(getStats(id).maxMp*.03),0,getStats(id).maxMp);}});
+    if(skill.cleanse) allyTargets.filter(Boolean).forEach((id)=>{removeNegative(id);if(hasPassive(actorId,'cleanse_barrier'))applyBarrier(id,.10);});
+    if(skill.mpHeal) allyTargets.filter(Boolean).forEach(id=>{const ch=getChar(id);ch.mp=clamp(ch.mp+Math.floor(getStats(id).maxMp*skill.mpHeal*scale.potency),0,getStats(id).maxMp);});
+    if(skill.regen) allyTargets.filter(Boolean).forEach(id=>{getChar(id).regen=Math.max(getChar(id).regen||0,regen);});
+    if(skill.barrier) allyTargets.filter(Boolean).forEach(id=>applyBarrier(id,barrier));
+    if(skill.clone) { actor.cloneTurns=Math.max(actor.cloneTurns||0,skill.clone+(scale.level>=6?1:0)); battleLog(`${getDef(actorId).short}は分身を展開した。`); }
+    if(skill.charge) { actor.charge=Math.max(actor.charge||0,skill.charge+(scale.max?.2:0)); battleLog(`${getDef(actorId).short}は力をためた。`); }
+    if(skill.deathGuard)allyTargets.filter(Boolean).forEach(id=>getChar(id).deathGuard=true);
+    if(skill.buffs)allyTargets.filter(Boolean).forEach(id=>addBuff(id,skill.buffs,(skill.turns||2)+dur));
+    if(skill.guard&&target){getChar(target).protectedBy=actorId;getChar(target).protectedTurns=(skill.turns||2)+dur;}
+    if(skill.debuff)targetEnemies.length?targetEnemies.forEach(e=>applyDebuffs(e,skill.debuff,dur)):getAliveEnemies().forEach(e=>applyDebuffs(e,skill.debuff,dur));
+    if(skill.dispel)getAliveEnemies().forEach(e=>{if(e.status)delete e.status.buffs;});
+    if(skill.lifeSteal&&targetEnemies.length){const recovered=Math.floor((skill.power||1)*combatStat(actorId,skill.kind==='physical'?'atk':'mag')*skill.lifeSteal*.55);actor.hp=clamp(actor.hp+recovered,0,getStats(actorId).maxHp);} if(skill.mpSteal)actor.mp=clamp(actor.mp+Math.floor(getStats(actorId).maxMp*skill.mpSteal),0,getStats(actorId).maxMp);
+    if(skill.extraActions){ b.extraTurns ||= {}; b.extraTurns[actorId]=(b.extraTurns[actorId]||0)+skill.extraActions; }
+    if(skill.allInOne){getAliveEnemies().forEach(e=>hitOne(e,power));['rainbow','white','black'].forEach(id=>{const ch=getChar(id);ch.hp=clamp(ch.hp+Math.floor(getStats(id).maxHp*heal),0,getStats(id).maxHp);});}
+    if(['physical','magic','special'].includes(skill.kind)){if(hasPassive(actorId,'fracture_chance')&&Math.random()<.2)targetEnemies.forEach(e=>setStatus(e,'fracture',1));audio.sfx('hit');}else audio.sfx('heal');
+    if(hasPassive(actorId,'skill_cycle')){actor.hp=clamp(actor.hp+Math.floor(getStats(actorId).maxHp*.02),0,getStats(actorId).maxHp);actor.mp=clamp(actor.mp+Math.floor(getStats(actorId).maxMp*.02),0,getStats(actorId).maxMp);} gainMastery(actorId,skill); battleLog(`${getDef(actorId).short}は ${skill.name} を使った。`); resolveAfterHit();
+  }
+
   function executeItem(actorId,itemId,targetId){const item=D.ITEM_DEFS[itemId];if(!takeItem(itemId,1))return;const target=getChar(targetId);if(item.effect.reviveHpRate&&target.hp<=0)target.hp=Math.max(1,Math.floor(getStats(targetId).maxHp*item.effect.reviveHpRate));if(item.effect.healHp)target.hp=clamp(target.hp+item.effect.healHp,0,getStats(targetId).maxHp);if(item.effect.healMp)target.mp=clamp(target.mp+item.effect.healMp,0,getStats(targetId).maxMp);if(item.effect.barrierRate)applyBarrier(targetId,item.effect.barrierRate);if(item.effect.restoreStamina)restoreStamina(item.effect.restoreStamina, `${item.name}でスタミナを回復した。`, { allowOvercap: !!item.effect.allowOvercap });audio.sfx('heal');battleLog(`${getDef(actorId).short}は ${item.name} を使った。`);resolveAfterHit();}
   function resolveAfterHit(){if(getAliveEnemies().length===0)return finishBattle(true);afterPlayerAction();}
-  function afterPlayerAction(){const b=state.battle;b.selected=null;b.turnIndex+=1;while(b.turnIndex<b.order.length&&getChar(b.order[b.turnIndex]).hp<=0)b.turnIndex+=1;if(b.turnIndex>=b.order.length){b.phase='enemy';render();window.setTimeout(enemyPhase,b.auto?300:520);}else{b.phase='command';render();if(b.auto)window.setTimeout(runAutoTurn,260);}}
-  function enemyPhase(){const b=state.battle;if(!b)return;for(const enemy of getAliveEnemies()){const targets=getAliveAllies();if(!targets.length)return finishBattle(false);const targetId=choice(targets);const move=enemy.status?.silence?enemy.skills[0]:choice(enemy.skills);const base=Math.max(1,Math.floor(enemyAttackValue(enemy)*move.power-effectiveDefenderDef(targetId,false)*.45+rng(-2,4)));applyDamage(targetId,base,false);if(move.effect==='fracture'){getChar(targetId).status||={};getChar(targetId).status.fracture=2;}battleLog(`${enemy.name}の${move.name}！ ${getDef(targetId).short}に${base}ダメージ。`);if(!getAliveAllies().length)return finishBattle(false);}tickBattleStatuses();b.turnIndex=0;while(b.turnIndex<b.order.length&&getChar(b.order[b.turnIndex]).hp<=0)b.turnIndex+=1;b.phase='command';render();if(b.auto)window.setTimeout(runAutoTurn,260);}
-  function tickBattleStatuses(){state.battle.enemies.forEach(e=>{Object.keys(e.status||{}).forEach(k=>{if(k!=='buffs'){e.status[k]-=1;if(e.status[k]<=0)delete e.status[k];}});});['rainbow','white','black'].forEach(id=>{const ch=getChar(id);if(ch.guard)delete ch.guard;if(ch.regen){ch.hp=clamp(ch.hp+Math.floor(getStats(id).maxHp*.04),0,getStats(id).maxHp);ch.regen-=1;if(ch.regen<=0)delete ch.regen;}if(ch.status){Object.keys(ch.status).forEach(k=>{if(k==='buffs'){Object.keys(ch.status.buffs).forEach(stat=>{ch.status.buffs[stat].turns-=1;if(ch.status.buffs[stat].turns<=0)delete ch.status.buffs[stat];});}else{ch.status[k]-=1;if(ch.status[k]<=0)delete ch.status[k];}});}if(ch.protectedTurns){ch.protectedTurns-=1;if(ch.protectedTurns<=0){delete ch.protectedTurns;delete ch.protectedBy;}}});}
+  function afterPlayerAction(){const b=state.battle;const justActed=b.order[b.turnIndex];b.selected=null;if(b.extraTurns?.[justActed]>0){b.extraTurns[justActed]-=1;b.phase='command';battleLog(`${getDef(justActed).short}は追加行動を得た！`);render();if(b.auto)window.setTimeout(runAutoTurn,180);return;}b.turnIndex+=1;while(b.turnIndex<b.order.length&&getChar(b.order[b.turnIndex]).hp<=0)b.turnIndex+=1;if(b.turnIndex>=b.order.length){b.phase='enemy';render();window.setTimeout(enemyPhase,b.auto?300:520);}else{b.phase='command';render();if(b.auto)window.setTimeout(runAutoTurn,260);}}
+  function enemyPhase(){const b=state.battle;if(!b)return;for(const enemy of getAliveEnemies()){if(enemy.status?.bind&&Math.random()<.55){battleLog(`${enemy.name}は拘束され、動けない！`);continue;}const targets=getAliveAllies();if(!targets.length)return finishBattle(false);const targetId=choice(targets);const move=enemy.status?.silence?enemy.skills[0]:choice(enemy.skills);const base=Math.max(1,Math.floor(enemyAttackValue(enemy)*move.power-effectiveDefenderDef(targetId,false)*.45+rng(-2,4)));applyDamage(targetId,base,false);if(move.effect==='fracture'){getChar(targetId).status||={};getChar(targetId).status.fracture=2;}battleLog(`${enemy.name}の${move.name}！ ${getDef(targetId).short}に${base}ダメージ。`);if(!getAliveAllies().length)return finishBattle(false);}tickBattleStatuses();b.turnIndex=0;while(b.turnIndex<b.order.length&&getChar(b.order[b.turnIndex]).hp<=0)b.turnIndex+=1;b.phase='command';render();if(b.auto)window.setTimeout(runAutoTurn,260);}
+  function tickBattleStatuses(){state.battle.enemies.forEach(e=>{if(e.status?.poison){const dot=Math.max(1,Math.floor(e.maxHp*.035));e.hp=Math.max(0,e.hp-dot);battleLog(`${e.name}は侵食で${dot}ダメージ。`);}Object.keys(e.status||{}).forEach(k=>{if(k!=='buffs'){e.status[k]-=1;if(e.status[k]<=0)delete e.status[k];}});});['rainbow','white','black'].forEach(id=>{const ch=getChar(id);if(ch.guard)delete ch.guard;if(ch.cloneTurns){ch.cloneTurns-=1;if(ch.cloneTurns<=0)delete ch.cloneTurns;}if(ch.regen){ch.hp=clamp(ch.hp+Math.floor(getStats(id).maxHp*.04),0,getStats(id).maxHp);ch.regen-=1;if(ch.regen<=0)delete ch.regen;}if(ch.status){Object.keys(ch.status).forEach(k=>{if(k==='buffs'){Object.keys(ch.status.buffs).forEach(stat=>{ch.status.buffs[stat].turns-=1;if(ch.status.buffs[stat].turns<=0)delete ch.status.buffs[stat];});}else{ch.status[k]-=1;if(ch.status[k]<=0)delete ch.status[k];}});}if(ch.protectedTurns){ch.protectedTurns-=1;if(ch.protectedTurns<=0){delete ch.protectedTurns;delete ch.protectedBy;}}});}
   function applyDefeatPenalty(title, text, locationId, fromAuto=false) {
     window.clearTimeout(autoExploreTimer);
     state.gold=Math.max(0,state.gold-15);
@@ -1199,6 +1337,17 @@
           const qty = Math.max(1, Math.ceil(rng(drop.qty[0], drop.qty[1]) * (enemy.lootMultiplier || difficulty.lootMultiplier || 1)));
           addItem(drop.id, qty); drops.push({ id: drop.id, qty });
         }
+      });
+    });
+    // 使用していない技にも、戦闘経験として少量の習熟を分配する。
+    const mealMastery = getPartyEquipmentSpecials().masteryRate || 0;
+    ['rainbow','white','black'].forEach((id)=>{
+      const used = b.usedSkills?.[id] || {};
+      currentSkills(id).forEach((skill)=>{
+        if (used[skill.id]) return;
+        const m = masteryState(id,skill.id); if(m.level>=10) return;
+        m.exp += 1 + Math.floor(mealMastery * 2);
+        while(m.level<10 && m.exp>=masteryRequired(m.level)){m.exp-=masteryRequired(m.level);m.level+=1;}
       });
     });
     const partyGear = getPartyEquipmentSpecials();
@@ -1256,7 +1405,15 @@
     if (id === 'shop') return showShop();
     if (id === 'craft') return showCraft();
     if (id === 'inn') return showInn();
+    if (id === 'restaurant') return showRestaurant();
     if (id === 'sell') return showSell();
+  }
+
+  function showRestaurant() {
+    const region = currentRegionId(); const regionDef = D.REGIONS?.[region] || {name:'この地方'}; const active = getFoodBuff();
+    const meals = (D.MEALS?.[region] || []);
+    const rows = meals.map((meal) => { const ok=rankAllowed(String(meal.minLevel)); return `<div class="list-row"><span class="badge ${ok?'':'locked'}">料理</span><div class="row-main"><strong>${meal.name}</strong><div class="meta">${meal.description}</div><div class="meta">${meal.durationMinutes}分／${meal.effect?.stats ? Object.entries(meal.effect.stats).map(([k,v])=>({maxHp:'HP',maxMp:'MP',atk:'攻撃',def:'防御',mag:'魔力',agi:'敏捷',luck:'幸運'}[k]||k)+'+'+v).join('・') : ''}</div></div><div><div class="value">${meal.price}G</div><button class="small-button" data-action="eat-meal" data-id="${meal.id}" ${!ok||state.gold<meal.price?'disabled':''}>食べる</button></div></div>`; }).join('');
+    showModal(`<div class="modal-header"><div><h2>${regionDef.name}の食堂</h2><p>地方料理を食べると、次に食べるまで時間制限つきの常時効果を得ます。</p></div><button class="modal-close" data-action="modal-close">×</button></div><div class="trait-box"><b>現在の食事効果</b><br>${active ? `${active.name}／残り${Math.ceil((active.expiresAt-Date.now())/60000)}分` : 'なし'}</div><div class="list">${rows}</div>`);
   }
 
   function showGuild() {
@@ -1301,16 +1458,20 @@
     const region = currentRegionId(); const regionDef = D.REGIONS?.[region] || {name:'この地方'}; const stock = D.REGION_SHOPS?.[region] || [];
     const items = stock.map((id) => D.ITEM_DEFS[id]).filter(Boolean).filter((entry) => entry.buy && (!entry.minLevel || rankAllowed(String(entry.minLevel))));
     const equipment = stock.map((id) => D.EQUIPMENT_DEFS[id]).filter(Boolean).filter((entry) => entry.price && (!entry.minLevel || rankAllowed(String(entry.minLevel))));
-    const itemRows = items.length ? items.map((entry)=>`<div class="list-row"><span class="badge">${entry.effect?.restoreStamina ? '活力' : entry.effect?.reviveHpRate ? '再起' : '道具'}</span><div class="row-main"><strong>${entry.name}</strong><div class="meta">${entry.description}</div><div class="meta">${entry.minLevel ? `解放：冒険者Lv.${entry.minLevel}` : '基本商品'}</div></div><div><div class="value">${entry.buy}G</div><button class="small-button" data-action="buy-item" data-id="${entry.id}" ${state.gold < entry.buy?'disabled':''}>買う</button></div></div>`).join('') : '<div class="empty-state">この地方では、現在購入できる道具がありません。</div>';
-    const equipRows = equipment.length ? equipment.map((entry)=>{ const owned=state.ownedEquipment?.includes(entry.id); return `<div class="list-row"><span class="badge">${entry.slot==='accessory'?'装飾':EQUIP_SLOT_LABELS[entry.slot]}</span><div class="row-main"><strong>${entry.name}${entry.allowed!=='all'?'（専用）':''}</strong><div class="meta">${entry.description}</div><div class="meta">${equipmentStatText(entry)}</div></div><div><div class="value">${entry.price}G</div><button class="small-button" data-action="buy-equipment" data-id="${entry.id}" ${owned || state.gold < entry.price?'disabled':''}>${owned?'所持済':'買う'}</button></div></div>`; }).join('') : '<div class="empty-state">この地方では、現在購入できる装備がありません。</div>';
-    showModal(`<div class="modal-header"><div><h2>${regionDef.name}の道具屋</h2><p>所持金：<b style="color:var(--gold)">${state.gold}G</b>　／　地方ごとに品揃えが変わります。</p></div><button class="modal-close" data-action="modal-close">×</button></div><h3>道具</h3><div class="list">${itemRows}</div><h3 style="margin-top:18px;">装備</h3><p class="note">装備は全員で共有し、仲間画面から6部位に分けて装着します。専用装備だけは対象キャラにしか装備できません。</p><div class="list">${equipRows}</div>`);
+    const itemRows = items.length ? items.map((entry)=>`<div class="list-row"><span class="badge">${entry.effect?.restoreStamina ? '活力' : '道具'}</span><div class="row-main"><strong>${entry.name}</strong><div class="meta">${entry.description}</div></div><div><div class="value">${entry.buy}G</div><button class="small-button" data-action="buy-item" data-id="${entry.id}" ${state.gold < entry.buy?'disabled':''}>買う</button></div></div>`).join('') : '<div class="empty-state">この地方では現在購入できる道具がありません。</div>';
+    const groupName = (e) => e.slot==='rightHand'||e.slot==='leftHand'?'武器・盾':e.slot==='accessory'?'装飾品':'防具';
+    const groups = ['武器・盾','防具','装飾品'].map((g)=>[g,equipment.filter((e)=>groupName(e)===g)]);
+    const eqRows = groups.map(([g,list])=>`<h3 style="margin-top:18px;">${g}</h3>${list.length?`<div class="list">${list.map((entry)=>{const owned=state.ownedEquipment?.includes(entry.id); const hand=entry.handType==='twoHand'?'両手':entry.handType==='twoHandShield'?'両手盾':entry.handType==='shield'?'片手盾':entry.weaponType?'片手武器':''; return `<div class="list-row"><span class="badge">${hand || (entry.slot==='accessory'?'装飾':EQUIP_SLOT_LABELS[entry.slot])}</span><div class="row-main"><strong>${entry.name}${entry.allowed!=='all'?'（専用）':''}</strong><div class="meta">${entry.description}</div><div class="meta">${equipmentStatText(entry)}</div></div><div><div class="value">${entry.price}G</div><button class="small-button" data-action="buy-equipment" data-id="${entry.id}" ${owned || state.gold < entry.price?'disabled':''}>${owned?'所持済':'買う'}</button></div></div>`;}).join('')}</div>`:'<div class="empty-state">このジャンルの取り扱いはありません。</div>'}`).join('');
+    showModal(`<div class="modal-header"><div><h2>${regionDef.name}の道具屋</h2><p>所持金：<b style="color:var(--gold)">${state.gold}G</b>　／　地方ごとに品揃えが変わります。</p></div><button class="modal-close" data-action="modal-close">×</button></div><h3>回復・探索道具</h3><div class="list">${itemRows}</div>${eqRows}<p class="note">片手武器と片手盾は左右へ自由に装備できます。両手武器・両手盾を装備すると左右両方を使います。</p>`);
   }
 
   function showCraft() {
     const region = currentRegionId(); const regionDef = D.REGIONS?.[region] || {name:'この地方'};
     const recipes = Object.values(D.RECIPES).filter((r) => (r.region || 'lindholm') === region).filter((r) => r.output?.type !== 'equipment' || D.EQUIPMENT_DEFS[r.output.id]).sort((a,b)=>(a.minLevel||1)-(b.minLevel||1)||a.name.localeCompare(b.name,'ja'));
-    const rows = recipes.length ? recipes.map((r)=>{ const complete=r.output.type==='equipment' && state.ownedEquipment?.includes(r.output.id); const levelOk=!r.minLevel||rankAllowed(String(r.minLevel)); const outEquip=r.output.type==='equipment'?D.EQUIPMENT_DEFS[r.output.id]:null; return `<div class="list-row"><span class="badge ${levelOk?'':'locked'}">${r.output.type==='equipment'?(outEquip?.slot==='accessory'?'装飾':EQUIP_SLOT_LABELS[outEquip?.slot]||'装備'):'道具'}</span><div class="row-main"><strong>${r.name}${complete?'（所持済）':''}</strong><div class="meta">${r.description}</div><div class="meta">${r.minLevel?`必要：冒険者Lv.${r.minLevel}　／　`:''}材料：${r.ingredients.map((ing)=>`${D.ITEM_DEFS[ing.id]?.name || ing.id} ${countItem(ing.id)}/${ing.qty}`).join('　')}</div>${outEquip?`<div class="meta">${equipmentStatText(outEquip)}</div>`:''}</div><button class="small-button" data-action="craft" data-id="${r.id}" ${!canCraft(r)?'disabled':''}>${complete?'所持済':levelOk?'作る':`Lv.${r.minLevel}必要`}</button></div>`; }).join('') : '<div class="empty-state">この地方で製造できるものは、まだありません。</div>';
-    showModal(`<div class="modal-header"><div><h2>${regionDef.name}の製造所</h2><p>地方ごとの素材から、道具と装備を製造します。完成品は自動装備せず、仲間画面の装備変更から着けます。</p></div><button class="modal-close" data-action="modal-close">×</button></div><div class="list">${rows}</div>`);
+    const cat = (r) => r.category || (r.output.type==='equipment' ? ((D.EQUIPMENT_DEFS[r.output.id]?.slot==='rightHand'||D.EQUIPMENT_DEFS[r.output.id]?.slot==='leftHand')?'武器・盾':D.EQUIPMENT_DEFS[r.output.id]?.slot==='accessory'?'装飾品':'防具') : '道具');
+    const cats=[...new Set(recipes.map(cat))];
+    const outputRows=(list)=>list.map((r)=>{const complete=r.output.type==='equipment'&&state.ownedEquipment?.includes(r.output.id);const levelOk=!r.minLevel||rankAllowed(String(r.minLevel));const outEquip=r.output.type==='equipment'?D.EQUIPMENT_DEFS[r.output.id]:null;return `<div class="list-row"><span class="badge ${levelOk?'':'locked'}">${cat(r)}</span><div class="row-main"><strong>${r.name}${complete?'（所持済）':''}</strong><div class="meta">${r.description}</div><div class="meta">${r.minLevel?`必要：冒険者Lv.${r.minLevel}　／　`:''}材料：${r.ingredients.map((ing)=>`${D.ITEM_DEFS[ing.id]?.name || ing.id} ${countItem(ing.id)}/${ing.qty}`).join('　')}</div>${outEquip?`<div class="meta">${equipmentStatText(outEquip)}</div>`:''}</div><button class="small-button" data-action="craft" data-id="${r.id}" ${!canCraft(r)?'disabled':''}>${complete?'所持済':levelOk?'作る':`Lv.${r.minLevel}必要`}</button></div>`;}).join('');
+    showModal(`<div class="modal-header"><div><h2>${regionDef.name}の製造所</h2><p>地方ごとの素材から、ジャンル別に道具・武器・防具・装飾を製造します。</p></div><button class="modal-close" data-action="modal-close">×</button></div>${cats.map((c)=>`<h3 style="margin-top:16px">${c}</h3><div class="list">${outputRows(recipes.filter(r=>cat(r)===c))}</div>`).join('')}`);
   }
 
   function showInn() {
@@ -1328,17 +1489,20 @@
 
   function equipmentStatText(equip) {
     const names = { maxHp:'最大HP', maxMp:'最大MP', atk:'攻撃', def:'防御', mag:'魔力', agi:'敏捷', luck:'幸運' };
+    const weaponNames = { sword:'片手剣', katana:'刀', bow:'長弓', gun:'魔導銃', spear:'槍', hammer:'ハンマー', greatsword:'大剣', shield:'片手盾', greatshield:'塔盾' };
     const stats = Object.entries(equip.stats || {}).map(([key,value]) => `${names[key] || key}+${value}`).join('／') || '能力値補正なし';
-    return equip.specialText ? `${stats}　／　${equip.specialText}` : stats;
+    const type = equip.weaponType ? `【${weaponNames[equip.weaponType] || equip.weaponType}】　` : '';
+    return type + (equip.specialText ? `${stats}　／　${equip.specialText}` : stats);
   }
   function showEquipmentManager(id) {
     const def = getDef(id); const loadout = getEquipmentLoadout(id); const eligible = ownedEquipment().filter((equip) => equipmentAllows(id,equip));
     const slotCards = EQUIP_SLOTS.map((slot) => {
       const equippedId = loadout[slot]; const equipped = equippedId ? D.EQUIPMENT_DEFS[equippedId] : null;
-      const compatible = eligible.filter((equip) => (equip.slot === 'accessory' ? slot.startsWith('accessory') : equip.slot === slot));
-      return `<section class="equip-slot-card"><header><b>${EQUIP_SLOT_LABELS[slot]}</b><span>${equipped ? equipped.name : '未装備'}</span></header>${equipped ? `<div class="equip-current"><strong>${equipped.name}</strong><small>${equipmentStatText(equipped)}</small><button class="small-button" data-action="unequip-item" data-id="${id}" data-slot="${slot}">外す</button></div>` : '<div class="note">未装備</div>'}<div class="equip-options">${compatible.length ? compatible.map((equip) => `<button class="equip-option ${equippedId===equip.id?'equipped':''}" data-action="equip-item" data-id="${id}" data-slot="${slot}" data-equip="${equip.id}"><b>${equip.name}</b><small>${equipmentStatText(equip)}</small>${equippedId===equip.id?'<em>装備中</em>':''}</button>`).join('') : '<span class="note">装備可能な所持品がありません。</span>'}</div></section>`;
+      const occupiedByTwoHand = slot === 'leftHand' && loadout.rightHand && ['twoHand','twoHandShield'].includes(D.EQUIPMENT_DEFS[loadout.rightHand]?.handType);
+      const compatible = eligible.filter((equip) => equipmentFitsSlot(equip,slot));
+      return `<section class="equip-slot-card"><header><b>${EQUIP_SLOT_LABELS[slot]}</b><span>${occupiedByTwoHand?'右手の両手装備で使用中':equipped ? equipped.name : '未装備'}</span></header>${occupiedByTwoHand?'<div class="note">両手武器・両手盾を外すと左手を使えます。</div>':equipped ? `<div class="equip-current"><strong>${equipped.name}</strong><small>${equipmentStatText(equipped)}</small><button class="small-button" data-action="unequip-item" data-id="${id}" data-slot="${slot}">外す</button></div>` : '<div class="note">未装備</div>'}<div class="equip-options">${compatible.length ? compatible.map((equip) => `<button class="equip-option ${equippedId===equip.id?'equipped':''}" data-action="equip-item" data-id="${id}" data-slot="${slot}" data-equip="${equip.id}"><b>${equip.name}</b><small>${equipmentStatText(equip)}</small>${equip.handType==='twoHand'||equip.handType==='twoHandShield'?'<em>両手を使用</em>':''}${equippedId===equip.id?'<em>装備中</em>':''}</button>`).join('') : '<span class="note">装備可能な所持品がありません。</span>'}</div></section>`;
     }).join('');
-    showModal(`<div class="modal-header"><div><h2>${def.short}の装備</h2><p>頭・体・腕・足・装飾1・装飾2の6部位。装備品は共通で使えますが、一部は本人専用です。</p></div><button class="modal-close" data-action="modal-close">×</button></div><div class="equip-grid">${slotCards}</div><p class="note">購入・製造した装備は、まず荷物に入り、ここから好きな仲間へ装備します。同じ装備は一人だけが装備できます。</p>`);
+    showModal(`<div class="modal-header"><div><h2>${def.short}の装備</h2><p>頭・体・腕・足・右手・左手・装飾1・装飾2の8部位。片手武器と片手盾は左右へ、両手装備は右手から装備します。</p></div><button class="modal-close" data-action="modal-close">×</button></div><div class="equip-grid">${slotCards}</div><p class="note">装備は全員で共有します。一部の紋章だけが、虹全・白零・黒零の専用です。</p>`);
   }
   function showCharacterDetails(id) {
     const def=getDef(id),ch=getChar(id),stats=getStats(id);const traits=(def.traits||[]).map(t=>`<div class="trait-box"><b>${t.name}</b><br>${t.description}</div>`).join('');const skills=currentSkills(id);
@@ -1381,18 +1545,26 @@
   }
 
   function showUpdateReport() {
-    showModal(`<div class="modal-header"><div><h2>v0.7 地方ギルド・装備更新報告</h2><p>地域ごとの目的を増やし、依頼の受注・報告と装備管理の手間を減らす更新です。</p></div><button class="modal-close" data-action="modal-close">×</button></div>
+    showModal(`<div class="modal-header"><div><h2>v0.8 十地方・食堂・キークエスト更新報告</h2><p>Lv.100までの冒険者成長、十地方の旅、地方料理、左右手装備、物語進行をまとめた大規模更新です。</p></div><button class="modal-close" data-action="modal-close">×</button></div>
       <div class="report-grid">
-        <section class="report-section"><h3>◆ 地方ギルド</h3><ul><li>報告可能な依頼を一括で報告</li><li>受注しても依頼画面を維持</li><li>繰り返し依頼を「納品」「討伐」に分離</li><li>地方ごとの依頼板・常設依頼を実装</li></ul></section>
-        <section class="report-section"><h3>◆ 装備</h3><ul><li>頭・体・腕・足・装飾1・装飾2の6部位</li><li>仲間画面から全員分を付け替え</li><li>共通装備＋虹全／白零／黒零の専用装備</li><li>能力値以外に障壁・経験値・素材・金・回復などの特殊効果</li></ul></section>
-        <section class="report-section"><h3>◆ 地方追加</h3><ul><li>リンドホルム、白霜北域、緋火海岸、暮影峡谷</li><li>町4、探索地17、各地方のショップ・製造・依頼を分離</li><li>火山海岸・沈み書庫・剣墓・調律の祭壇跡を追加</li><li>地方ごとの敵、レア敵、ボス、隠し収集物を追加</li></ul></section>
-        <section class="report-section"><h3>◆ スタミナと周回</h3><ul><li>スタミナ0は探索不可のみ。戦闘敗北扱いを廃止</li><li>オート探索は活力剤設定・下限・使用数で継続</li><li>初級・中級・上級で消費と報酬が変化</li><li>メタル系・ゴールド系を含む周回報酬を強化</li></ul></section>
-      </div><p class="note">今回は「地方ごとに遊ぶ理由があるか」「装備の選択が楽しいか」「まとめ報告が十分に速いか」を重点的に見てください。</p><div class="modal-footer"><button class="primary-button" data-action="modal-close">確認した</button></div>`);
+        <section class="report-section"><h3>◆ ボリューム</h3><ul><li>地方10／町10／探索地36</li><li>依頼148（キークエスト10・繰り返し71）</li><li>敵61（レア・メタル・ゴールド・ボス含む）</li><li>装備205／製造114／技99／料理100</li></ul></section>
+        <section class="report-section"><h3>◆ ストーリー</h3><ul><li>地方ごとにキークエストを設置</li><li>レベル＋前章達成で次地方を解放</li><li>原初境界でテリオス系統を解放</li><li>キークエスト個別報告時に会話を表示</li></ul></section>
+        <section class="report-section"><h3>◆ 食堂と装備</h3><ul><li>各地方の食堂に10料理</li><li>時間制限つき能力上昇・特殊バフ</li><li>頭・体・腕・足・右手・左手・装飾2枠</li><li>片手／両手武器・盾、地方固有の専用紋章</li></ul></section>
+        <section class="report-section"><h3>◆ 戦闘と周回</h3><ul><li>多段・ランダム・ためる・分身・追加行動</li><li>未使用技にも戦闘後の習熟経験</li><li>地域ごとの敵・素材・製造・ショップを分離</li><li>料理・装備の特殊効果が探索と戦闘へ反映</li></ul></section>
+      </div><p class="note">今回は「地方ごとの遊び分け」「食堂・装備の選択」「キークエストの導線」「後半の育成要求」を重点的に確認してください。</p><div class="modal-footer"><button class="primary-button" data-action="modal-close">確認した</button></div>`);
+  }
+
+  function showStoryLog() {
+    const entries = (state.storyLog || []).map((entry, index) => {
+      const quest = D.QUESTS[entry.id];
+      return `<div class="list-row"><span class="badge done">第${index + 1}章</span><div class="row-main"><strong>${entry.name}</strong><div class="meta">${quest?.storyText || '地方の記録はまだ整理されていない。'}</div></div></div>`;
+    }).join('');
+    showModal(`<div class="modal-header"><div><h2>旅の記録</h2><p>キークエストで明らかになった、三人と世界の記録。</p></div><button class="modal-close" data-action="modal-close">×</button></div>${entries ? `<div class="list">${entries}</div>` : '<div class="empty-state">まだキークエストを達成していません。</div>'}`);
   }
 
   function showSystemMenu() {
     const audioState = state.audio.music ? 'オン' : 'オフ';
-    showModal(`<div class="modal-header"><div><h2>メニュー</h2><p>この試作版はブラウザの保存領域に自動セーブします。</p></div><button class="modal-close" data-action="modal-close">×</button></div><div class="list"><button class="list-row" data-action="open-report"><span class="badge active">v0.7</span><span class="row-main"><strong>今回の更新報告</strong><span class="meta">地方ギルド・装備6部位・地方追加の変更点を確認する。</span></span></button><button class="list-row" data-action="toggle-audio"><span class="badge">音楽</span><span class="row-main"><strong>BGM：${audioState}</strong><span class="meta">場所・戦闘に応じたチップ・アンビエントBGMを切り替える。</span></span></button><button class="list-row" data-action="save"><span class="badge">保存</span><span class="row-main"><strong>今すぐセーブ</strong><span class="meta">現在の進行・パネル・習熟度をブラウザに保存する。</span></span></button><button class="list-row" data-action="reset-confirm"><span class="badge locked">初期化</span><span class="row-main"><strong>最初からやり直す</strong><span class="meta">セーブデータを初期状態に戻す。</span></span></button></div><div class="audio-note">スマホでは、最初のタップ後に音が鳴ります。音楽は外部素材を使わないゲーム内生成音です。</div>`);
+    showModal(`<div class="modal-header"><div><h2>メニュー</h2><p>この試作版はブラウザの保存領域に自動セーブします。</p></div><button class="modal-close" data-action="modal-close">×</button></div><div class="list"><button class="list-row" data-action="open-report"><span class="badge active">v0.8</span><span class="row-main"><strong>今回の更新報告</strong><span class="meta">十地方・食堂・左右手装備・キークエストの変更点を確認する。</span></span></button><button class="list-row" data-action="open-story-log"><span class="badge">記録</span><span class="row-main"><strong>旅の記録</strong><span class="meta">キークエストで判明した世界と三人の物語を読み返す。</span></span></button><button class="list-row" data-action="toggle-audio"><span class="badge">音楽</span><span class="row-main"><strong>BGM：${audioState}</strong><span class="meta">地方・戦闘に応じたチップ・アンビエントBGMを切り替える。</span></span></button><button class="list-row" data-action="save"><span class="badge">保存</span><span class="row-main"><strong>今すぐセーブ</strong><span class="meta">現在の進行・パネル・習熟度をブラウザに保存する。</span></span></button><button class="list-row" data-action="reset-confirm"><span class="badge locked">初期化</span><span class="row-main"><strong>最初からやり直す</strong><span class="meta">セーブデータを初期状態に戻す。</span></span></button></div><div class="audio-note">スマホでは、最初のタップ後に音が鳴ります。音楽は外部素材を使わないゲーム内生成音です。</div>`);
   }
 
   function confirmReset() {
@@ -1499,6 +1671,48 @@
       pixel(ctx,651,300,73,62,'#5c5776');pixel(ctx,669,279,12,48,'#d9d6ff');pixel(ctx,695,270,12,57,'#bdb5ed');pixel(ctx,720,279,12,48,'#d9d6ff');
       return;
     }
+    if (activeRegion === 'verdantgrove') {
+      regionFrame('#1f453d','#4f8055','#b7d985','VERDANT GROVE');
+      for(let i=0;i<75;i++){ const x=42+(i*79)%(w-84), y=92+(i*41)%260; pixel(ctx,x,y,15,88,'#2b4b35'); pixel(ctx,x-22,y-34,55,45,i%3?'#387349':'#5d9d5f'); pixel(ctx,x-9,y-52,31,25,'#80bb6a'); }
+      ctx.strokeStyle='#7dc9d7';ctx.lineWidth=9;ctx.beginPath();ctx.moveTo(126,72);ctx.bezierCurveTo(214,184,154,249,300,353);ctx.bezierCurveTo(420,420,519,330,700,425);ctx.stroke();
+      ctx.strokeStyle='#d5ca83';ctx.lineWidth=5;ctx.beginPath();ctx.moveTo(158,390);ctx.quadraticCurveTo(306,303,449,260);ctx.quadraticCurveTo(565,221,678,129);ctx.stroke();
+      pixel(ctx,582,81,106,127,'#456941');pixel(ctx,611,46,47,171,'#6aa86b');pixel(ctx,628,36,13,65,'#d8f3a7');return;
+    }
+    if (activeRegion === 'aurorasteppe') {
+      regionFrame('#315c76','#79a6a1','#e3e0a4','AURORA STEPPE');
+      for(let i=0;i<95;i++){const x=32+(i*61)%(w-64),y=210+(i*37)%245;pixel(ctx,x,y,18,7,i%2?'#88b77d':'#a7ce91');}
+      for(let i=0;i<18;i++){const x=110+(i*47)%600,y=89+(i%4)*28;pixel(ctx,x,y,34,14,'#dceef0');pixel(ctx,x+11,y-7,14,7,'#f5ffff');}
+      ctx.strokeStyle='#e8d59c';ctx.lineWidth=7;ctx.beginPath();ctx.moveTo(120,407);ctx.bezierCurveTo(265,310,405,327,520,219);ctx.quadraticCurveTo(603,143,710,110);ctx.stroke();
+      pixel(ctx,618,113,82,96,'#697b84');pixel(ctx,642,74,12,95,'#d8e9ef');pixel(ctx,675,67,12,102,'#b5d5df');return;
+    }
+    if (activeRegion === 'saltdesert') {
+      regionFrame('#8c6f48','#d5b66e','#f5e4b2','SALT DESERT');
+      for(let i=0;i<120;i++){const x=35+(i*43)%(w-70),y=84+(i*29)%385;pixel(ctx,x,y,21,5,i%3?'#e0c47d':'#f1d995');}
+      ctx.strokeStyle='#b8855c';ctx.lineWidth=6;ctx.beginPath();ctx.moveTo(90,357);ctx.quadraticCurveTo(225,210,356,330);ctx.quadraticCurveTo(468,411,586,196);ctx.quadraticCurveTo(660,125,730,150);ctx.stroke();
+      pixel(ctx,475,91,84,136,'#9c7b55');pixel(ctx,494,65,46,183,'#cfb17b');pixel(ctx,508,95,17,31,'#edf1ce');
+      pixel(ctx,147,356,68,35,'#59a3a1');pixel(ctx,155,339,20,23,'#4f8b71');pixel(ctx,190,341,14,20,'#4f8b71');return;
+    }
+    if (activeRegion === 'thunderplateau') {
+      regionFrame('#29334a','#59657f','#b0c5e3','THUNDER PLATEAU');
+      for(let i=0;i<62;i++){const x=43+(i*71)%(w-86),y=106+(i*43)%282;pixel(ctx,x,y,25,12,i%2?'#56616d':'#74808a');pixel(ctx,x+7,y-9,10,9,'#9aa7b3');}
+      for(let i=0;i<12;i++){const x=120+(i*53)%590,y=45+(i*67)%170;pixel(ctx,x,y,4,68,'#c5e8ff');pixel(ctx,x-8,y+56,18,4,'#e5f8ff');}
+      ctx.strokeStyle='#d3c27e';ctx.lineWidth=6;ctx.beginPath();ctx.moveTo(149,397);ctx.quadraticCurveTo(281,318,408,264);ctx.quadraticCurveTo(550,199,696,143);ctx.stroke();
+      pixel(ctx,630,84,20,171,'#3e485a');pixel(ctx,624,75,33,16,'#a9c0e5');pixel(ctx,638,49,6,33,'#d6efff');return;
+    }
+    if (activeRegion === 'abyssalcity') {
+      regionFrame('#122d4a','#23647c','#8bd5e9','ABYSSAL CITY');
+      pixel(ctx,24,305,w-48,h-345,'#103f62');for(let i=0;i<95;i++){const x=35+(i*59)%(w-70),y=325+(i*31)%125;pixel(ctx,x,y,13,3,i%2?'#4c9ab0':'#75cad0');}
+      for(let i=0;i<35;i++){const x=75+(i*97)%610,y=112+(i*47)%185;pixel(ctx,x,y,25,61,'#39738d');pixel(ctx,x-7,y-9,39,12,'#68a9b8');}
+      pixel(ctx,535,92,164,174,'#2c5e77');pixel(ctx,561,58,35,207,'#4e91a0');pixel(ctx,615,77,35,188,'#3b768c');pixel(ctx,663,51,25,214,'#71b2c0');
+      ctx.strokeStyle='#c3d6a0';ctx.lineWidth=5;ctx.beginPath();ctx.moveTo(152,386);ctx.bezierCurveTo(275,313,383,289,504,223);ctx.quadraticCurveTo(589,173,681,151);ctx.stroke();return;
+    }
+    if (activeRegion === 'originfrontier') {
+      regionFrame('#151728','#312f47','#f0e6ad','ORIGIN FRONTIER');
+      pixel(ctx,24,20,(w-48)/2,h-40,'#ebe6d4');pixel(ctx,w/2,20,(w-48)/2,h-40,'#212030');
+      for(let i=0;i<48;i++){const x=36+(i*89)%(w-72),y=78+(i*53)%370;pixel(ctx,x,y,7,7,['#fb737b','#ffe276','#7fe7b2','#77caff','#d88dff'][i%5]);}
+      ctx.strokeStyle='#f4dd85';ctx.lineWidth=8;ctx.beginPath();ctx.moveTo(w/2,42);ctx.bezierCurveTo(w/2-58,165,w/2+56,250,w/2,459);ctx.stroke();
+      ctx.strokeStyle='#f9f9ef';ctx.lineWidth=2;ctx.stroke();pixel(ctx,614,126,79,103,'#5f596f');pixel(ctx,639,91,30,151,'#e5ddbb');pixel(ctx,651,74,7,34,'#ff98d1');return;
+    }
     pixel(ctx,0,0,w,h,'#25354a');
     // 地図の羊皮紙風ベース
     pixel(ctx,24,20,w-48,h-40,'#6d8b63');
@@ -1600,8 +1814,9 @@
     if (a === 'start') startGame();
     else if (a === 'go-world') { state.scene='world'; saveGame(); render(); }
     else if (a === 'map-mode') { state.mapUi ||= {}; state.mapUi.mode=target.dataset.mode || 'region'; saveGame(); render(); }
-    else if (a === 'map-select-region') { const region=D.REGIONS?.[id]; if(region && rankAllowed(region.unlockRank || '1')) { state.mapUi ||= {}; state.mapUi.region=id; state.mapUi.mode='region'; saveGame(); render(); } }
+    else if (a === 'map-select-region') { const region=D.REGIONS?.[id]; if(region && regionUnlocked(region.id)) { state.mapUi ||= {}; state.mapUi.region=id; state.mapUi.mode='region'; saveGame(); render(); } }
     else if (a === 'open-report') { showUpdateReport(); }
+    else if (a === 'open-story-log') { showStoryLog(); }
     else if (a === 'go-party') { state.scene='party'; render(); }
     else if (a === 'enter-location') enterLocation(id);
     else if (a === 'explore') explore(id);
@@ -1618,6 +1833,7 @@
     else if (a === 'equip-item') { if (equipEquipment(id, target.dataset.slot, target.dataset.equip)) { toast('装備を変更しました。', 'good'); showEquipmentManager(id); } else toast('その装備は変更できません。', 'warn'); }
     else if (a === 'unequip-item') { unequipEquipment(id, target.dataset.slot); showEquipmentManager(id); }
     else if (a === 'panel-unlock') unlockPanel(id,target.dataset.panel);
+    else if (a === 'panel-unlock-chain') unlockPanelChain(id,target.dataset.branch);
     else if (a === 'panel-select') { state.panelUi.selected[id]=target.dataset.panel; render(); }
     else if (a === 'panel-branch') { state.panelUi.branch[id]=target.dataset.branch; state.panelUi.selected[id]=null; render(); }
     else if (a === 'panel-unlock-selected') unlockPanel(id,target.dataset.panel);
@@ -1625,7 +1841,7 @@
     else if (a === 'quest-accept-all') { acceptAllAvailableQuests(modalLayer.classList.contains('open') ? 'guild' : 'log', target.dataset.region || null, target.dataset.type || null); }
     else if (a === 'guild-tab') { state.questUi.tab = target.dataset.tab; saveGame(); showGuild(); }
     else if (a === 'quest-tab') { state.questUi.tab = target.dataset.tab; saveGame(); render(); }
-    else if (a === 'quest-complete') { const inGuild = modalLayer.classList.contains('open'); const done = completeQuest(id, { keepView:true }); if (done) { if (inGuild) showGuild(); else render(); } }
+    else if (a === 'quest-complete') { const inGuild = modalLayer.classList.contains('open'); const isKey = !!D.QUESTS[id]?.key; const done = completeQuest(id, { keepView:!isKey }); if (done && !isKey) { if (inGuild) showGuild(); else render(); } }
     else if (a === 'quest-complete-all') { completeAllQuests(target.dataset.region || null, target.dataset.type || null, modalLayer.classList.contains('open') ? 'guild' : 'log'); }
     else if (a === 'buy-item') { buyItem(id); if(modalLayer.classList.contains('open')) showShop(); }
     else if (a === 'buy-equipment') { buyEquipment(id); if(modalLayer.classList.contains('open')) showShop(); }
@@ -1633,6 +1849,7 @@
     else if (a === 'equip-craft') { equipCrafted(id); }
     else if (a === 'sell-item') { sellItem(id); if(modalLayer.classList.contains('open')) showSell(); }
     else if (a === 'rest') { closeModal(); restAtInn(); }
+    else if (a === 'eat-meal') { if(eatMeal(id)) showRestaurant(); }
     else if (a === 'use-item-world') useItemOutside(id);
     else if (a === 'use-stamina-item') useStaminaItem(id);
     else if (a === 'use-item-outside-target') useItemOutsideTarget(target.dataset.item,id);

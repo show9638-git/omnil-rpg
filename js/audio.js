@@ -98,6 +98,42 @@ window.OMNIL_AUDIO = (() => {
       bass: ['D3','REST','A2','REST','Bb2','REST','F2','REST','C3','REST','G2','REST','A2','REST','D3','REST'],
       pad: ['D4','F4','A4','C5'],
     },
+    canopy: {
+      stepMs: 330, wave: 'sine', root: 'E3',
+      melody: ['E4','G4','B4','D5','B4','G4','E4','REST','F4','A4','C5','A4','G4','E4','D4','REST'],
+      bass: ['E3','REST','B3','REST','C3','REST','G3','REST','E3','REST','B3','REST','A3','REST','E3','REST'],
+      pad: ['E4','G4','B4','D5'],
+    },
+    sky: {
+      stepMs: 250, wave: 'triangle', root: 'A3',
+      melody: ['A4','C5','E5','A5','E5','C5','A4','REST','B4','D5','F5','D5','B4','A4','G4','REST'],
+      bass: ['A3','REST','E3','REST','F3','REST','C3','REST','A3','REST','E3','REST','D3','REST','E3','REST'],
+      pad: ['A4','C5','E5','A5'],
+    },
+    desert: {
+      stepMs: 365, wave: 'triangle', root: 'D3',
+      melody: ['D4','F4','A4','REST','C5','A4','F4','REST','E4','G4','B4','REST','D5','B4','G4','REST'],
+      bass: ['D3','REST','A2','REST','C3','REST','G3','REST','D3','REST','A2','REST','E3','REST','B3','REST'],
+      pad: ['D4','F4','A4','C5'],
+    },
+    storm: {
+      stepMs: 210, wave: 'square', root: 'E3',
+      melody: ['E4','B4','E5','B4','D5','A4','D5','A4','E4','B4','F5','B4','D5','A4','E4','REST'],
+      bass: ['E3','E3','B3','B3','D3','D3','A3','A3','E3','E3','B3','B3','C3','C3','A3','A3'],
+      pad: ['E4','G4','B4','D5'],
+    },
+    abyss: {
+      stepMs: 425, wave: 'sine', root: 'C3',
+      melody: ['C4','REST','E4','G4','REST','D4','C4','REST','A3','REST','C4','E4','G4','REST','D4','REST'],
+      bass: ['C3','REST','G2','REST','A2','REST','E3','REST','C3','REST','G2','REST','F3','REST','E3','REST'],
+      pad: ['C4','E4','G4','B4'],
+    },
+    origin: {
+      stepMs: 295, wave: 'triangle', root: 'D3',
+      melody: ['D4','F4','A4','D5','C5','A4','F4','D4','E4','G4','B4','E5','D5','B4','G4','D4'],
+      bass: ['D3','REST','A2','REST','F3','REST','C3','REST','E3','REST','B3','REST','G3','REST','D3','REST'],
+      pad: ['D4','F4','A4','D5'],
+    },
   };
 
   function init() {
