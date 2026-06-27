@@ -564,3 +564,25 @@ button:disabled { cursor: not-allowed; opacity: .46; }
   .map-heading-row .page-title { font-size:23px; }
   .auto-tonic-box label { grid-template-columns:1fr; gap:4px; }
 }
+
+/* v0.7 地方ギルド・6部位装備 */
+.equipment-summary { margin:10px 0 0; padding:9px 10px; border:1px solid #526b91; border-radius:9px; background:rgba(22,35,56,.55); display:grid; gap:4px; }
+.equipment-summary b { color:#f4d782; font-size:11px; }
+.equipment-summary span { color:#d4e1f6; font-size:10px; line-height:1.55; overflow-wrap:anywhere; }
+.equip-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:11px; margin:13px 0; }
+.equip-slot-card { border:1px solid #50698e; border-radius:11px; padding:10px; background:linear-gradient(145deg,rgba(45,61,91,.78),rgba(22,30,48,.84)); min-width:0; }
+.equip-slot-card header { display:flex; gap:8px; align-items:baseline; justify-content:space-between; border-bottom:1px solid rgba(158,187,225,.18); padding-bottom:7px; margin-bottom:8px; }
+.equip-slot-card header b { color:#ffdc88; font-size:12px; }
+.equip-slot-card header span { color:#e0ebfa; font-size:11px; max-width:70%; text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.equip-current { display:grid; gap:4px; margin:0 0 8px; }
+.equip-current strong { font-size:12px; color:#f6f5e8; }
+.equip-current small,.equip-option small { color:#b9c9e4; font-size:10px; line-height:1.45; }
+.equip-current .small-button { justify-self:start; margin-top:3px; }
+.equip-options { display:grid; gap:6px; max-height:175px; overflow:auto; padding-right:2px; }
+.equip-option { text-align:left; padding:8px; border:1px solid #4a6288; border-radius:8px; background:#1a2942; color:#e5edf9; display:grid; gap:3px; cursor:pointer; }
+.equip-option:hover { border-color:#f2d37e; background:#324565; }
+.equip-option.equipped { border-color:#79dba2; box-shadow:inset 0 0 0 1px rgba(121,219,162,.22); }
+.equip-option b { font-size:11px; }
+.equip-option em { color:#87e1aa; font-size:10px; font-style:normal; }
+@media (max-width:760px) { .equip-grid { grid-template-columns:1fr; } .equip-options { max-height:145px; } }
+.region-story { margin:7px 0 0; padding-left:10px; border-left:3px solid #d7b96a; color:#d9e0c4; font-size:11px; line-height:1.65; max-width:680px; }
